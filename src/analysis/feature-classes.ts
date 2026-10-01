@@ -3,15 +3,26 @@ import type { Observation } from '../types';
 /**
  * MVP feature classes.
  *
- * Tag presets are based on current OSM tagging conventions for visually
- * identifiable, node-oriented POIs. These live in one place (not scattered
+ * Tag presets follow current OSM tagging conventions for visually
+ * identifiable, node-oriented POIs, and live in one place (not scattered
  * through the UI) so conventions stay consistent and reviewable.
+ *
+ * Schema (issue #5): required primary tags vs. optional inferred attributes.
+ *  - requiredTags: the tags that define the feature; always applied by
+ *    default. A node carrying these is a valid instance of the class.
+ *  - suggestedTags: optional subtype/detail attributes. NEVER applied by
+ *    default — they are surfaced as suggestions in the review UI and only
+ *    added when analysis or the reviewer confirms them from the photo.
+ *    (E.g. `bicycle_parking=frame` is a detail tag; the primary tag is
+ *    `amenity=bicycle_parking`.)
  */
 export interface FeatureClass {
   id: string;
   label: string;
-  /** Default OSM tags applied when nothing better is known. */
-  baseTags: Record<string, string>;
+  /** Primary tags that define the feature (always applied by default). */
+  requiredTags: Record<string, string>;
+  /** Optional detail attributes (suggested only; reviewer/analysis confirms). */
+  suggestedTags: Record<string, string>;
   /** Short human description of what to look for. */
   hint: string;
 }
@@ -20,56 +31,75 @@ export const FEATURE_CLASSES: FeatureClass[] = [
   {
     id: 'bench',
     label: 'Bench',
-    baseTags: { amenity: 'bench' },
+    requiredTags: { amenity: 'bench' },
+    suggestedTags: {},
     hint: 'Outdoor seating.',
   },
   {
     id: 'vending_machine',
     label: 'Vending machine',
-    baseTags: { amenity: 'vending_machine' },
-    hint: 'Vending machine; add vending=* for product type.',
+    requiredTags: { amenity: 'vending_machine' },
+    suggestedTags: {},
+    hint: 'Vending machine; add vending=<type> in review when the product type is visible.',
   },
   {
     id: 'playground',
     label: 'Playground equipment',
-    baseTags: { leisure: 'playground', playground: 'slide' },
-    hint: 'A single piece of playground equipment (node).',
+    // An individual piece of equipment is a node tagged playground=<type>;
+    // leisure=playground marks the playground AREA (way/area), not the
+    // equipment. The equipment type cannot be guessed: it must come from
+    // analysis or the reviewer (see suggestedTags).
+    requiredTags: {},
+    suggestedTags: { playground: 'slide' },
+    hint: 'A single piece of playground equipment (node). Set playground=<type> from the photo.',
   },
   {
     id: 'information_board',
     label: 'Information board',
-    baseTags: { tourism: 'information', information: 'board' },
-    hint: 'Physical information board or map display.',
+    requiredTags: { tourism: 'information' },
+    suggestedTags: { information: 'board' },
+    hint: 'Physical information board or map display (information=board|map).',
   },
   {
     id: 'drinking_water',
     label: 'Drinking water',
-    baseTags: { amenity: 'drinking_water' },
+    requiredTags: { amenity: 'drinking_water' },
+    suggestedTags: {},
     hint: 'Drinking water fountain.',
   },
   {
     id: 'toilets',
     label: 'Toilets',
-    baseTags: { amenity: 'toilets' },
+    requiredTags: { amenity: 'toilets' },
+    suggestedTags: {},
     hint: 'Public toilet facility.',
   },
   {
     id: 'aed',
     label: 'AED',
-    baseTags: { amenity: 'defibrillator' },
+    // OSM convention: AEDs are tagged emergency=defibrillator
+    // (amenity=defibrillator is a deprecated/incorrect variant).
+    requiredTags: { emergency: 'defibrillator' },
+    suggestedTags: {},
     hint: 'Automated external defibrillator.',
   },
   {
     id: 'bicycle_parking',
     label: 'Bicycle parking',
-    baseTags: { bicycle_parking: 'frame' },
+    // Primary tag is amenity=bicycle_parking; bicycle_parking=<type> is a
+    // subtype/detail tag and is only suggested, never applied blindly.
+    requiredTags: { amenity: 'bicycle_parking' },
+    suggestedTags: { bicycle_parking: 'frame' },
     hint: 'Bicycle parking frame/stand (node).',
   },
   {
     id: 'waste_basket',
     label: 'Waste basket',
-    baseTags: { amenity: 'recycling' },
-    hint: 'Waste/recycling bin (node).',
+    // amenity=waste_basket is a pedestrian waste bin. amenity=recycling is a
+    // recycling facility/container — a different feature, not a default here.
+    requiredTags: { amenity: 'waste_basket' },
+    suggestedTags: {},
+    hint: 'Waste bin (node).',
   },
 ];
 
@@ -77,9 +107,16 @@ export function getFeatureClass(id: string): FeatureClass | undefined {
   return FEATURE_CLASSES.find((f) => f.id === id);
 }
 
+/** Required primary tags for a feature class (applied as defaults). */
 export function defaultTagsFor(featureType: string): Record<string, string> {
   const cls = getFeatureClass(featureType);
-  return cls ? { ...cls.baseTags } : {};
+  return cls ? { ...cls.requiredTags } : {};
+}
+
+/** Suggested optional attributes for a feature class (review-time only). */
+export function suggestedTagsFor(featureType: string): Record<string, string> {
+  const cls = getFeatureClass(featureType);
+  return cls ? { ...cls.suggestedTags } : {};
 }
 
 /** Merge tag suggestions from several observations of the same object. */
@@ -91,7 +128,7 @@ export function mergeTags(observations: Observation[]): Record<string, string> {
       if (!(key in merged) || (value && !merged[key])) merged[key] = value;
     }
   }
-  // Fill in class defaults for keys that were never suggested.
+  // Fill in required class defaults for keys that were never suggested.
   for (const obs of observations) {
     for (const [key, value] of Object.entries(defaultTagsFor(obs.featureType))) {
       if (!(key in merged)) merged[key] = value;

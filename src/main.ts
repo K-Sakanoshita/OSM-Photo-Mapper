@@ -6,8 +6,8 @@ import { GeolocationTracker } from './capture/geolocation-tracker';
 import { capturePhoto } from './capture/photo';
 import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
-import { annotateCandidate, fetchNearbyOsm } from './osm/overpass';
-import { getFeatureClass } from './analysis/feature-classes';
+import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
+import { getFeatureClass, suggestedTagsFor } from './analysis/feature-classes';
 import type {
   CandidateStatus,
   FeatureCandidate,
@@ -121,7 +121,33 @@ class App {
       (id, lat, lon) => void this.onPinDragged(id, lat, lon)
     );
 
+    // Issue #6: a persisted `recording=true` flag from a crashed session is
+    // stale — recording is a RUNTIME state that only exists while a live
+    // GeolocationTracker is active. Repair old records at startup so the
+    // survey list never shows a phantom "recording" status.
+    void this.repairStaleRecordingFlags();
+
     this.render();
+  }
+
+  /** Reset any persisted `recording` flags left behind by crashed sessions. */
+  private async repairStaleRecordingFlags(): Promise<void> {
+    try {
+      const metas = await surveyDb.listSurveys();
+      for (const meta of metas) {
+        if (meta.recording) {
+          meta.recording = false;
+          await surveyDb.saveSurveyMeta({
+            ...meta,
+            gpsSamples: [],
+            photos: [],
+            candidates: []
+          });
+        }
+      }
+    } catch {
+      // DB unavailable (e.g. private browsing): nothing to repair.
+    }
   }
 
   /* ---------------- navigation ---------------- */
@@ -179,8 +205,8 @@ class App {
       el('button', { class: 'btn primary', onclick: () => void this.newSurvey() }, '+ New survey')
     );
 
-    const surveys = await surveyDb.listSurveys();
-    if (surveys.length === 0) {
+    const metas = await surveyDb.listSurveys();
+    if (metas.length === 0) {
       this.content.replaceChildren(
         el(
           'div',
@@ -192,8 +218,16 @@ class App {
     }
 
     const items = await Promise.all(
-      surveys.map(async (meta) => {
-        const full = (await surveyDb.loadSurvey(meta.id)) ?? meta;
+      metas.map(async (meta) => {
+        // Assemble the full survey from the normalized child stores.
+        // Fallback for an orphaned meta row: empty child arrays.
+        const full =
+          (await surveyDb.loadSurvey(meta.id)) ?? {
+            ...meta,
+            gpsSamples: [],
+            photos: [],
+            candidates: []
+          };
         return el(
           'div',
           { class: 'survey-item', onclick: () => void this.openSurvey(full) },
@@ -241,7 +275,13 @@ class App {
 
   private async openSurvey(survey: Survey): Promise<void> {
     this.survey = survey;
+    // The tracker is runtime state: a restored survey is never actively
+    // recording. Repair any stale persisted recording flag (issue #6).
     this.tracker = null;
+    if (survey.recording) {
+      survey.recording = false;
+      void surveyDb.saveSurveyMeta(survey);
+    }
     this.mode = 'survey';
     this.render();
   }
@@ -353,17 +393,23 @@ class App {
 
     const noteEl = this.bottombar.querySelector<HTMLInputElement>('#photo-note');
     try {
+      // Issue #6: the photo's timestamp comes from EXIF / file metadata (the
+      // true capture time, not "now"), and its GPS context is the track
+      // position at THAT moment (interpolated when between samples) — not
+      // the newest sample at selection time. EXIF GPS is never used as the
+      // object position.
       const photo = await capturePhoto({
         surveyId: s.id,
         file,
-        gps: this.tracker?.nearestSample(),
+        track: s.gpsSamples,
         heading: this.tracker?.currentHeading,
         note: noteEl?.value.trim() || undefined
       });
       s.photos.push(photo);
       this.mapView.setPhotos(s.photos);
       if (noteEl) noteEl.value = '';
-      toast(`Photo captured (${s.photos.length})`);
+      const srcNote = photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
+      toast(`Photo captured (${s.photos.length})${srcNote}`);
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
       if (mapBtn) mapBtn.disabled = false;
     } catch (e) {
@@ -384,10 +430,22 @@ class App {
 
       const result = await new MockAnalyzer().analyze(fresh);
 
-      const anchor =
-        fresh.gpsSamples[fresh.gpsSamples.length - 1] ??
-        fresh.photos.find((p) => p.gps)?.gps;
-      const nearby = anchor ? await fetchNearbyOsm(anchor.lat, anchor.lon, 150) : [];
+      // Nearby OSM lookup (duplicate detection + position evidence).
+      // Issue #5: cover the WHOLE surveyed area — track samples, photo
+      // positions and candidate positions — in a single bbox query, then
+      // score each candidate against nearby objects using ITS OWN feature
+      // class. Anchoring to the last GPS point missed objects photographed
+      // elsewhere along long walks.
+      const anchorPoints: LatLon[] = [
+        ...fresh.gpsSamples.map((g) => ({ lat: g.lat, lon: g.lon })),
+        ...fresh.photos
+          .filter((p) => p.gps)
+          .map((p) => ({ lat: p.gps!.lat, lon: p.gps!.lon })),
+        ...result.candidates
+          .filter((c) => c.lat != null && c.lon != null)
+          .map((c) => ({ lat: c.lat!, lon: c.lon! }))
+      ];
+      const nearby = await fetchOsmInArea(anchorPoints);
       for (const c of result.candidates) {
         c.osmMatches = annotateCandidate(c, nearby, 120);
       }
@@ -513,6 +571,24 @@ class App {
       )
     );
 
+    // Optional subtype suggestions (issue #5): never applied by default;
+    // surfaced here for the reviewer to confirm from the photo.
+    const pending = Object.entries(suggestedTagsFor(c.featureType)).filter(
+      ([k, v]) => c.tags[k] !== v
+    );
+    if (pending.length > 0) {
+      card.append(
+        el(
+          'div',
+          { class: 'suggest-row' },
+          'Suggested (add if visible in photo):',
+          ...pending.map(([k, v]) =>
+            el('button', { class: 'btn small suggest-btn', onclick: () => void this.onAddSuggestedTag(c, k, v) }, `+ ${k}=${v}`)
+          )
+        )
+      );
+    }
+
     const nameInput = el('input', {
       class: 'name-input',
       placeholder: 'Name (optional)',
@@ -607,6 +683,14 @@ class App {
     }
     c.tags[k] = v;
     await surveyDb.updateCandidate(c);
+    if (this.mode === 'review') this.render();
+  }
+
+  /** Add one reviewer-confirmed suggested (optional) tag. */
+  private async onAddSuggestedTag(c: FeatureCandidate, k: string, v: string): Promise<void> {
+    c.tags[k] = v;
+    await surveyDb.updateCandidate(c);
+    toast(`${k}=${v} added`);
     if (this.mode === 'review') this.render();
   }
 

@@ -24,12 +24,18 @@ export interface GpsSample {
   heading?: number;
 }
 
+/** Where a photo's capture timestamp came from (quality marker). */
+export type TimestampSource = 'exif' | 'file' | 'selected';
+
 /** A captured photo associated with the nearest GPS context. */
 export interface Photo {
   id: string;
   surveyId: string;
   /** Epoch milliseconds of capture. */
   timestamp: number;
+  /** Provenance of `timestamp`: EXIF capture time, file metadata, or the
+   *  post-selection fallback. Used to flag low-quality associations. */
+  timestampSource?: TimestampSource;
   /** JPEG image data (base64) or a pointer; kept out of the index for MVP. */
   image?: string;
   /** Nearest GPS sample at capture time. */
@@ -109,17 +115,27 @@ export interface FeatureCandidate {
   linkedOsmId?: number;
 }
 
-/** A top-level walking survey session. */
-export interface Survey {
+/**
+ * Survey row stored in the `surveys` IndexedDB store.
+ *
+ * Deliberately metadata-only: GPS samples, photos, observations and
+ * candidates live in their own normalized child stores, so the survey row
+ * never carries (duplicates) image payloads or stale child arrays.
+ */
+export interface SurveyMeta {
   id: string;
   name: string;
   createdAt: number;
+  /** Whether the GPS track is being actively recorded (session flag). */
+  recording: boolean;
+}
+
+/** A top-level walking survey session (in-memory view, reconstructed on load). */
+export interface Survey extends SurveyMeta {
   /** Continuous GPS track recorded during the session. */
   gpsSamples: GpsSample[];
   photos: Photo[];
   candidates: FeatureCandidate[];
-  /** Whether the GPS track is being actively recorded. */
-  recording: boolean;
 }
 
 /** The result of running the analysis pipeline on a survey. */

@@ -3,26 +3,38 @@ import type {
   GpsSample,
   Observation,
   Photo,
-  Survey
+  Survey,
+  SurveyMeta
 } from '../types';
 
 /**
  * Local persistence via IndexedDB.
  *
  * Stores are normalized per the data model:
- *   surveys        -> Survey (metadata + recording flag)
+ *   surveys        -> SurveyMeta (id, name, createdAt, recording flag ONLY)
  *   gps_samples    -> GpsSample
  *   photos         -> Photo
  *   observations   -> Observation
  *   candidates     -> FeatureCandidate
  *
- * Survey.gpsSamples / photos / candidates arrays are reconstructed on read
- * from the child stores so records stay independently updatable (e.g. dragging
- * a pin updates just the candidate row).
+ * The surveys store never holds child data (photo image payloads, GPS
+ * arrays, ...). The full `Survey` view is reconstructed on read from the
+ * child stores so records stay independently updatable (e.g. dragging a pin
+ * updates just the candidate row).
  */
 
 const DB_NAME = 'osm-photo-mapper';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+
+/** Reduce a (possibly legacy, fully-populated) survey row to metadata. */
+function metaOnly(row: Survey): SurveyMeta {
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: row.createdAt,
+    recording: row.recording === true
+  };
+}
 
 const STORES = {
   surveys: 'surveys',
@@ -40,8 +52,8 @@ function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
+    req.onupgradeneeded = (ev: IDBVersionChangeEvent) => {
+      const db = ev.target as IDBDatabase;
       if (!db.objectStoreNames.contains(STORES.surveys)) {
         db.createObjectStore(STORES.surveys, { keyPath: 'id' });
       }
@@ -61,6 +73,24 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORES.candidates)) {
         const s = db.createObjectStore(STORES.candidates, { keyPath: 'id' });
         s.createIndex('by_survey', 'surveyId', { unique: false });
+      }
+
+      // v1 -> v2: legacy survey rows stored the full Survey (photos include
+      // image data URLs), duplicating large payloads and risking stale child
+      // arrays in the metadata row. Strip them down to metadata-only rows.
+      if ((ev.oldVersion ?? 0) < 2) {
+        const s = db.transaction(STORES.surveys, 'readwrite').objectStore(STORES.surveys);
+        const cursorReq = s.openCursor();
+        cursorReq.onsuccess = (e: Event) => {
+          const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result as IDBCursorWithValue | null;
+          if (cur) {
+            const row = cur.value as Survey;
+            if (row.photos !== undefined || row.gpsSamples !== undefined || row.candidates !== undefined) {
+              void s.put(metaOnly(row));
+            }
+            cur.continue();
+          }
+        };
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -114,22 +144,27 @@ function getAll<T>(store: StoreName): Promise<T[]> {
 }
 
 export const surveyDb = {
-  /** Create a new (empty) survey. */
+  /** Create a new (empty) survey. Only metadata goes into the surveys store. */
   async createSurvey(survey: Survey): Promise<void> {
     await tx([STORES.surveys], 'readwrite', (t) =>
-      t.objectStore(STORES.surveys).put(survey)
+      t.objectStore(STORES.surveys).put(metaOnly(survey))
     );
   },
 
+  /**
+   * Persist survey metadata (name, recording flag, ...).
+   * Child arrays are deliberately dropped: they live in their own stores and
+   * re-storing them here would duplicate payloads and can go stale.
+   */
   async saveSurveyMeta(survey: Survey): Promise<void> {
     await tx([STORES.surveys], 'readwrite', (t) =>
-      t.objectStore(STORES.surveys).put(survey)
+      t.objectStore(STORES.surveys).put(metaOnly(survey))
     );
   },
 
   /** Load a full survey with its child records assembled. */
   async loadSurvey(id: string): Promise<Survey | undefined> {
-    const meta = await tx<Survey | undefined>([STORES.surveys], 'readonly', (t) =>
+    const meta = await tx<SurveyMeta | undefined>([STORES.surveys], 'readonly', (t) =>
       t.objectStore(STORES.surveys).get(id)
     );
     if (!meta) return undefined;
@@ -148,8 +183,9 @@ export const surveyDb = {
     };
   },
 
-  async listSurveys(): Promise<Survey[]> {
-    const metas = await getAll<Survey>(STORES.surveys);
+  /** Lightweight metadata rows for the survey list (no image payloads). */
+  async listSurveys(): Promise<SurveyMeta[]> {
+    const metas = await getAll<SurveyMeta>(STORES.surveys);
     return metas.sort((a, b) => b.createdAt - a.createdAt);
   },
 

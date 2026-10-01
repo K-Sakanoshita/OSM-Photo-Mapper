@@ -1,4 +1,4 @@
-import type { BBox, Photo } from '../types';
+import type { BBox, GpsSample, Photo } from '../types';
 
 /**
  * Position estimation helpers.
@@ -211,6 +211,70 @@ export function distanceMeters(
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * Associate a timestamp with the GPS track.
+ *
+ * Returns the track sample nearest `at` (epoch ms). When `at` falls strictly
+ * between two samples, the position is linearly interpolated between them
+ * (bearing/rate interpolation over short walking intervals is a good
+ * approximation), which avoids snapping the photo to a seconds-old fix.
+ *
+ * Note: this yields the CAMERA position at capture time. It is never used as
+ * the target object's coordinate (that is the position estimator's job).
+ */
+export function trackPositionAt(
+  samples: GpsSample[],
+  at: number
+): GpsSample | undefined {
+  if (samples.length === 0) return undefined;
+  if (samples.length === 1) return samples[0];
+
+  // Samples are assumed sorted by timestamp (they are, per surveyDb.loadSurvey).
+  let best = samples[0];
+  let bestDt = Math.abs(samples[0].timestamp - at);
+  let lo = 0;
+  let hi = samples.length - 1;
+  for (let i = 1; i < samples.length; i++) {
+    const dt = Math.abs(samples[i].timestamp - at);
+    if (dt < bestDt) {
+      best = samples[i];
+      bestDt = dt;
+      lo = i - 1;
+      hi = i;
+    }
+  }
+
+  const a = samples[lo];
+  const b = samples[hi];
+  const span = b.timestamp - a.timestamp;
+  // Between two distinct samples: interpolate lat/lon (and heading when both known).
+  if (span > 0 && a.timestamp <= at && at <= b.timestamp && a.id !== b.id) {
+    const t = (at - a.timestamp) / span;
+    if (t <= 0) return a;
+    if (t >= 1) return b;
+    return {
+      id: `gps-interp-${at}`,
+      lat: a.lat + (b.lat - a.lat) * t,
+      lon: a.lon + (b.lon - a.lon) * t,
+      accuracy: Math.max(a.accuracy, b.accuracy),
+      timestamp: at,
+      speed: a.speed != null && b.speed != null ? a.speed + (b.speed - a.speed) * t : undefined,
+      heading:
+        a.heading != null && b.heading != null
+          ? interpolateHeading(a.heading, b.heading, t)
+          : a.heading ?? b.heading
+    };
+  }
+  return best;
+}
+
+/** Shortest-arc interpolation between two bearings, degrees. */
+function interpolateHeading(fromDeg: number, toDeg: number, t: number): number {
+  let delta = ((toDeg - fromDeg) % 360 + 360) % 360;
+  if (delta > 180) delta -= 360;
+  return normalizeBearing(fromDeg + delta * t);
 }
 
 /**
