@@ -102,9 +102,14 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     label: 'Public toilets',
     category: 'amenities',
     requiredTags: { amenity: 'toilets' },
-    suggestedTags: { toilets: 'public' },
-    commonValues: { toilets: ['public', 'fee', 'free', 'semi_public'] },
-    hint: 'The access type (public/fee/free) must be confirmed, not guessed',
+    suggestedTags: {},
+    // Access/fee details on a standalone amenity=toilets object use the
+    // established access=*/fee=* keys. The toilets=* namespace describes
+    // toilets INSIDE another feature; the wiki explicitly says not to use
+    // toilets:access=* on a separate amenity=toilets object (issue #9).
+    // https://wiki.openstreetmap.org/wiki/Tag:amenity%3Dtoilets
+    commonValues: { access: ['yes', 'customers'], fee: ['yes', 'no'] },
+    hint: 'Access/fee details use access=*/fee=*; they must be confirmed, not guessed',
     autoTag: true,
     geometryPreference: 'either'
   },
@@ -125,7 +130,10 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     id: 'fire_extinguisher',
     label: 'Fire extinguisher',
     category: 'emergency',
-    requiredTags: { emergency: 'extinguisher' },
+    // Documented value: emergency=fire_extinguisher (NOT
+    // emergency=extinguisher, which is not the wiki-documented tag).
+    // https://wiki.openstreetmap.org/wiki/Tag:emergency%3Dfire_extinguisher
+    requiredTags: { emergency: 'fire_extinguisher' },
     suggestedTags: {},
     hint: 'Usually mounted on a building wall',
     autoTag: true,
@@ -188,11 +196,13 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     id: 'information_board',
     label: 'Information board',
     category: 'street_furniture',
-    // OSM convention: amenity=information + information=board (a
-    // bare amenity=information means an information POINT/office).
-    requiredTags: { amenity: 'information', information: 'board' },
+    // Documented mapping: tourism=information + information=board.
+    // amenity=information is listed on the wiki as a possible synonym /
+    // tagging mistake, not the normal board mapping (issue #9).
+    // https://wiki.openstreetmap.org/wiki/Tag:information%3Dboard
+    requiredTags: { tourism: 'information', information: 'board' },
     suggestedTags: {},
-    hint: 'Physical notice/tourist board; information=board distinguishes it from an info point',
+    hint: 'Physical notice/tourist board; mapped as tourism=information + information=board',
     autoTag: true,
     geometryPreference: 'node'
   },
@@ -246,10 +256,14 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     id: 'torii',
     label: 'Torii',
     category: 'religious',
-    // Established convention in Japan: historic=torii.
-    requiredTags: { historic: 'torii' },
+    // Current Japanese OSM guidance: man_made=ceremonial_gate +
+    // ceremonial_gate=torii. The older man_made=torii is deprecated in
+    // favour of the approved ceremonial-gate tagging; historic=torii is
+    // not an established convention and must not be introduced (issue #9).
+    // https://wiki.openstreetmap.org/wiki/Key:ceremonial_gate
+    requiredTags: { man_made: 'ceremonial_gate', ceremonial_gate: 'torii' },
     suggestedTags: {},
-    hint: 'Shrine gate',
+    hint: 'Shrine gate; ceremonial_gate=torii identifies the type',
     autoTag: true,
     geometryPreference: 'node'
   },
@@ -257,18 +271,16 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     id: 'stone_lantern',
     label: 'Stone lantern',
     category: 'religious',
-    // No established convention: both historic=stone_lantern (9 objects
-    // worldwide) and man_made=stone_lantern (18) are in use — ambiguous,
-    // so this class is review-only with two candidate mappings.
+    // No established OSM convention exists for stone lanterns: the
+    // historic=/man_made=stone_lantern usage is minimal, and the proposed
+    // man_made=lamp was abandoned. Safest MVP behaviour (issue #9):
+    // detect the feature but provide NO built-in mapping — pure
+    // review-only, the reviewer sets the tags manually.
     requiredTags: {},
     suggestedTags: {},
-    hint: 'Tagging convention is unsettled (historic= vs man_made=) — choose a mapping or edit the tags',
+    hint: 'No established OSM tag — set the tags manually during review',
     autoTag: false,
-    geometryPreference: 'node',
-    mappings: [
-      { label: 'historic=stone_lantern', tags: { historic: 'stone_lantern' } },
-      { label: 'man_made=stone_lantern', tags: { man_made: 'stone_lantern' } }
-    ]
+    geometryPreference: 'node'
   },
   {
     id: 'komainu',

@@ -60,8 +60,10 @@ function escRegex(v: string): string {
  *
  * Review-only classes (autoTag=false, issue #9) contribute the tag values
  * of their candidate mappings, so existing objects using ANY of the
- * plausible conventions (e.g. historic= vs man_made=stone_lantern) are
- * found and can be linked.
+ * plausible conventions (e.g. tourism=artwork vs historic=memorial for a
+ * statue) are found and can be linked. Classes with no built-in mapping
+ * (stone_lantern, komainu — conventions unsettled) are not found by the
+ * lookup; that is a documented limitation.
  *
  * Overpass set unions de-duplicate, so a node matching several clauses is
  * returned once.

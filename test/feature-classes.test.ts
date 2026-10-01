@@ -67,6 +67,33 @@ describe('feature class presets (issue #5)', () => {
     expect(suggestedTagsFor('nope')).toEqual({});
   });
 
+  it('corrected OSM conventions are locked in (issue #9 remaining blocker)', () => {
+    // 1. Information board: tourism=information + information=board
+    //    (amenity=information is a synonym/mistake, not the normal mapping).
+    expect(defaultTagsFor('information_board')).toEqual({ tourism: 'information', information: 'board' });
+    expect(getFeatureClass('information_board')!.requiredTags['amenity']).toBeUndefined();
+
+    // 2. Fire extinguisher: emergency=fire_extinguisher (not emergency=extinguisher).
+    expect(defaultTagsFor('fire_extinguisher')).toEqual({ emergency: 'fire_extinguisher' });
+
+    // 3. Torii: man_made=ceremonial_gate + ceremonial_gate=torii
+    //    (historic=torii is not an established convention).
+    expect(defaultTagsFor('torii')).toEqual({ man_made: 'ceremonial_gate', ceremonial_gate: 'torii' });
+    expect(getFeatureClass('torii')!.requiredTags['historic']).toBeUndefined();
+
+    // 4. Toilets: the toilets=* namespace is for toilets INSIDE another
+    //    feature; standalone amenity=toilets objects use access=*/fee=*.
+    const toilets = getFeatureClass('toilets')!;
+    for (const k of Object.keys({ ...toilets.requiredTags, ...toilets.suggestedTags, ...(toilets.commonValues ?? {}) })) {
+      expect(k.startsWith('toilets'), `${k}: toilets=* namespace must not be suggested`).toBe(false);
+    }
+    expect(commonValuesFor('toilets')).toEqual({ access: ['yes', 'customers'], fee: ['yes', 'no'] });
+
+    // 5. Stone lantern: low-usage mappings removed -> no built-in mapping.
+    expect(mappingsFor('stone_lantern')).toEqual([]);
+    expect(getFeatureClass('stone_lantern')!.autoTag).toBe(false);
+  });
+
   it('required keys never overlap with suggested or common-value keys within a class', () => {
     for (const cls of FEATURE_CLASSES) {
       for (const k of Object.keys(cls.requiredTags)) {
@@ -173,11 +200,10 @@ describe('issue #9: expanded class set, geometry policy, review-only mappings', 
     }
   });
 
-  it('exposes candidate mappings for ambiguous classes', () => {
-    expect(mappingsFor('stone_lantern')).toEqual([
-      { label: 'historic=stone_lantern', tags: { historic: 'stone_lantern' } },
-      { label: 'man_made=stone_lantern', tags: { man_made: 'stone_lantern' } }
-    ]);
+  it('exposes candidate mappings only for classes with plausible conventions (issue #9)', () => {
+    // stone_lantern and komainu have NO established OSM convention -> no
+    // built-in mappings (pure review-only, reviewer tags manually).
+    expect(mappingsFor('stone_lantern')).toEqual([]);
     expect(mappingsFor('statue')).toHaveLength(2);
     expect(mappingsFor('komainu')).toEqual([]);
     expect(mappingsFor('bench')).toEqual([]);
@@ -192,54 +218,46 @@ describe('issue #9: expanded class set, geometry policy, review-only mappings', 
   });
 
   it('definingKeysFor includes mapping keys for review-only classes', () => {
-    expect(definingKeysFor('stone_lantern')).toEqual(expect.arrayContaining(['historic', 'man_made']));
+    // stone_lantern has no mapping -> no defining keys (no OSM lookup).
+    expect(definingKeysFor('stone_lantern')).toEqual([]);
     expect(definingKeysFor('statue')).toEqual(
       expect.arrayContaining(['tourism', 'artwork_type', 'historic', 'memorial'])
     );
     expect(definingKeysFor('komainu')).toEqual([]);
   });
 
-  describe('applyMappingToTags', () => {
-    const mappings = mappingsFor('stone_lantern');
-    const [historicM, manMadeM] = mappings;
+  describe('applyMappingToTags (statue: multi-key mappings)', () => {
+    const statueM = mappingsFor('statue');
+    const [artwork, memorial] = statueM;
 
     it('applies the chosen mapping to an empty tag set', () => {
-      expect(applyMappingToTags({}, historicM, mappings)).toEqual({ historic: 'stone_lantern' });
+      expect(applyMappingToTags({}, artwork, statueM))
+        .toEqual({ tourism: 'artwork', artwork_type: 'statue' });
     });
 
     it('removes the other mapping\'s key when switching (value still matches it)', () => {
-      expect(applyMappingToTags({ historic: 'stone_lantern' }, manMadeM, mappings))
-        .toEqual({ man_made: 'stone_lantern' });
+      expect(applyMappingToTags({ tourism: 'artwork', artwork_type: 'statue' }, memorial, statueM))
+        .toEqual({ historic: 'memorial', memorial: 'statue' });
     });
 
     it('never clobbers manually-set values', () => {
-      expect(applyMappingToTags({ historic: 'custom' }, manMadeM, mappings))
-        .toEqual({ historic: 'custom', man_made: 'stone_lantern' });
-    });
-
-    it('handles multi-key mappings (statue)', () => {
-      const statueM = mappingsFor('statue');
-      const [artwork, memorial] = statueM;
-      expect(applyMappingToTags({}, artwork, statueM))
-        .toEqual({ tourism: 'artwork', artwork_type: 'statue' });
-      expect(applyMappingToTags({ tourism: 'artwork', artwork_type: 'statue' }, memorial, statueM))
-        .toEqual({ historic: 'memorial', memorial: 'statue' });
+      expect(applyMappingToTags({ tourism: 'custom' }, memorial, statueM))
+        .toEqual({ tourism: 'custom', historic: 'memorial', memorial: 'statue' });
     });
   });
 
   describe('findChosenMapping', () => {
     it('detects the mapping already reflected in the tags', () => {
-      const sl = mappingsFor('stone_lantern');
-      expect(findChosenMapping('stone_lantern', { historic: 'stone_lantern' })).toEqual(sl[0]);
-      expect(findChosenMapping('stone_lantern', { man_made: 'stone_lantern' })).toEqual(sl[1]);
       const st = mappingsFor('statue');
       expect(findChosenMapping('statue', { tourism: 'artwork', artwork_type: 'statue', name: 'X' }))
         .toEqual(st[0]);
     });
 
-    it('returns null when no mapping matches', () => {
-      expect(findChosenMapping('stone_lantern', {})).toBeNull();
-      expect(findChosenMapping('stone_lantern', { historic: 'other' })).toBeNull();
+    it('returns null when no mapping matches (incl. mapping-less classes)', () => {
+      // stone_lantern has no built-in mapping -> always null.
+      expect(findChosenMapping('stone_lantern', { historic: 'stone_lantern' })).toBeNull();
+      expect(findChosenMapping('stone_lantern', { man_made: 'stone_lantern' })).toBeNull();
+      expect(findChosenMapping('statue', { tourism: 'artwork' })).toBeNull();
       expect(findChosenMapping('komainu', { historic: 'sculpture' })).toBeNull();
       expect(findChosenMapping('bench', { amenity: 'bench' })).toBeNull();
     });

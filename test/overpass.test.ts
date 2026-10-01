@@ -25,6 +25,12 @@ describe('buildTagClauses (issue #5)', () => {
     expect(emergency).toMatch(/\^\(([^)]*)\)\$"\]$/);
     expect(emergency).toContain('defibrillator');
     expect(emergency).toContain('fire_hydrant');
+    // Corrected convention (issue #9): emergency=fire_extinguisher.
+    expect(emergency).toContain('fire_extinguisher');
+    // No bare `extinguisher` alternate (emergency=extinguisher is not the
+    // documented convention, issue #9).
+    const emergencyAlts = emergency!.match(/^\^\((.*)\)\$/)?.[1].split('|') ?? [];
+    expect(emergencyAlts).not.toContain('extinguisher');
   });
 
   it('emits an anchored alternation regex for multi-value keys', () => {
@@ -46,22 +52,30 @@ describe('buildTagClauses (issue #5)', () => {
     expect(keys).toEqual(
       new Set([
         'amenity', 'emergency', 'information', 'highway', 'man_made', 'barrier',
-        'historic', 'tourism', 'artwork_type', 'memorial', 'leisure', 'playground'
+        'historic', 'tourism', 'ceremonial_gate', 'artwork_type', 'memorial',
+        'leisure', 'playground'
       ])
     );
   });
 
   it('includes review-only candidate mapping values in the search (issue #9)', () => {
     // Existing objects using ANY plausible convention should be found for
-    // duplicate detection — even when the convention is unsettled.
+    // duplicate detection. stone_lantern/komainu have no built-in mapping
+    // (conventions unsettled, issue #9) and are not in the search — a
+    // documented limitation.
     const manMade = clauses.find((c) => c.startsWith('["man_made"~'));
     expect(manMade).toContain('manhole');
-    expect(manMade).toContain('stone_lantern');
-    const historic = clauses.find((c) => c.startsWith('["historic"~'));
-    expect(historic).toContain('torii');
-    expect(historic).toContain('stone_lantern');
-    expect(historic).toContain('memorial');
-    expect(clauses).toContain('["tourism"="artwork"]');
+    // Corrected torii convention (issue #9): man_made=ceremonial_gate.
+    expect(manMade).toContain('ceremonial_gate');
+    // torii is now identified by the type key ceremonial_gate=torii.
+    expect(clauses).toContain('["ceremonial_gate"="torii"]');
+    // historic only carries the statue memorial convention (single value).
+    expect(clauses).toContain('["historic"="memorial"]');
+    // tourism carries the board + artwork conventions (alternation).
+    const tourism = clauses.find((c) => c.startsWith('["tourism"~'));
+    expect(tourism).toBeDefined();
+    expect(tourism).toContain('information');
+    expect(tourism).toContain('artwork');
     expect(clauses).toContain('["artwork_type"="statue"]');
     expect(clauses).toContain('["memorial"="statue"]');
     expect(clauses).toContain('["leisure"="playground"]');
@@ -182,10 +196,11 @@ describe('scoreTagsForClass (issue #5: score against ONE class)', () => {
   });
 
   it('scores review-only classes by presence of mapping keys (issue #9)', () => {
-    // stone_lantern: defining keys are historic + man_made; a match under
-    // either convention scores 0.5 (partial presence, never a false 1.0).
-    expect(scoreTagsForClass({ historic: 'stone_lantern' }, 'stone_lantern')).toBeCloseTo(0.5);
-    expect(scoreTagsForClass({ man_made: 'stone_lantern' }, 'stone_lantern')).toBeCloseTo(0.5);
+    // stone_lantern: NO built-in mapping (convention unsettled, issue #9)
+    // -> no defining keys -> score 0 (same documented limitation as
+    // komainu: no OSM duplicate lookup is possible).
+    expect(scoreTagsForClass({ historic: 'stone_lantern' }, 'stone_lantern')).toBe(0);
+    expect(scoreTagsForClass({ man_made: 'stone_lantern' }, 'stone_lantern')).toBe(0);
     // statue: defining keys are tourism, artwork_type, historic, memorial;
     // the artwork convention scores 2/4.
     expect(scoreTagsForClass({ tourism: 'artwork', artwork_type: 'statue' }, 'statue')).toBeCloseTo(0.5);
