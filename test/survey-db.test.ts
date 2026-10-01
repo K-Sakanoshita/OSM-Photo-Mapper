@@ -61,42 +61,46 @@ function getAllRows<T>(db: IDBDatabase, store: string): Promise<T[]> {
 }
 
 /** A legacy v1 survey row: full Survey with embedded child arrays. */
-function makeLegacySurvey(): { survey: Survey; gps: GpsSample[]; photos: Photo[]; cands: FeatureCandidate[] } {
+function makeLegacySurvey(
+  n = 1,
+  name = 'Legacy walk'
+): { survey: Survey; gps: GpsSample[]; photos: Photo[]; cands: FeatureCandidate[] } {
+  const id = `s${n}`;
   const gps: GpsSample[] = [
-    { id: 'g1', surveyId: 's1', lat: 48.8, lon: 2.3, accuracy: 5, timestamp: 1000 },
-    { id: 'g2', surveyId: 's1', lat: 48.801, lon: 2.301, accuracy: 4, timestamp: 2000 }
+    { id: `g${n}a`, surveyId: id, lat: 48.8, lon: 2.3, accuracy: 5, timestamp: 1000 },
+    { id: `g${n}b`, surveyId: id, lat: 48.801, lon: 2.301, accuracy: 4, timestamp: 2000 }
   ];
   const photos: Photo[] = [
     {
-      id: 'p1',
-      surveyId: 's1',
+      id: `p${n}`,
+      surveyId: id,
       timestamp: 1500,
       timestampSource: 'exif',
-      image: 'data:image/jpeg;base64,VERYLARGE',
+      image: `data:image/jpeg;base64,VERYLARGE${n}`,
       gps: gps[0],
       heading: 90
     }
   ];
   const cands: FeatureCandidate[] = [
     {
-      id: 'c1',
-      surveyId: 's1',
+      id: `c${n}`,
+      surveyId: id,
       featureType: 'bench',
       lat: 48.8005,
       lon: 2.3005,
       positionConfidence: 0.6,
       tagConfidence: 0.7,
       tags: { amenity: 'bench' },
-      observationIds: ['o1'],
+      observationIds: [`o${n}`],
       osmMatches: [],
       warnings: [],
       status: 'new'
     }
   ];
   const survey: Survey = {
-    id: 's1',
-    name: 'Legacy walk',
-    createdAt: 9000,
+    id,
+    name,
+    createdAt: 9000 + n,
     recording: false,
     gpsSamples: gps,
     photos,
@@ -144,7 +148,7 @@ describe('v1 -> v2 migration', () => {
     // Build a v1 database whose surveys store holds a full legacy Survey row
     // (child stores intentionally left empty: worst case for preservation).
     const db1 = await openDb(idb, 1, createV1Stores);
-    const { survey } = makeLegacySurvey();
+    const { survey } = makeLegacySurvey(1);
     await putAll(db1, 'surveys', 'readwrite', [survey]);
     db1.close();
 
@@ -153,7 +157,7 @@ describe('v1 -> v2 migration', () => {
     // Opening at v2 triggers the upgrade; this must resolve (not abort).
     const metas = await surveyDb.listSurveys();
     expect(metas).toHaveLength(1);
-    expect(metas[0]).toEqual({ id: 's1', name: 'Legacy walk', createdAt: 9000, recording: false });
+    expect(metas[0]).toEqual({ id: 's1', name: 'Legacy walk', createdAt: 9001, recording: false });
 
     // Raw surveys row is metadata-only now (no embedded child arrays).
     const db2 = await openDb(idb, 2, () => {});
@@ -167,7 +171,7 @@ describe('v1 -> v2 migration', () => {
   it('preserves embedded child records and reconstructs the survey', async () => {
     const idb = new IDBFactory();
     const db1 = await openDb(idb, 1, createV1Stores);
-    const { survey } = makeLegacySurvey();
+    const { survey } = makeLegacySurvey(1);
     await putAll(db1, 'surveys', 'readwrite', [survey]);
     db1.close();
 
@@ -176,20 +180,59 @@ describe('v1 -> v2 migration', () => {
 
     expect(loaded?.id).toBe('s1');
     expect(loaded?.gpsSamples).toHaveLength(2);
-    expect(loaded?.gpsSamples?.[0]).toMatchObject({ id: 'g1', lat: 48.8, timestamp: 1000 });
+    expect(loaded?.gpsSamples?.[0]).toMatchObject({ id: 'g1a', lat: 48.8, timestamp: 1000 });
     expect(loaded?.photos).toHaveLength(1);
     expect(loaded?.photos?.[0]).toMatchObject({ id: 'p1', timestamp: 1500, timestampSource: 'exif' });
-    expect(loaded?.photos?.[0].image).toBe('data:image/jpeg;base64,VERYLARGE');
+    expect(loaded?.photos?.[0].image).toBe('data:image/jpeg;base64,VERYLARGE1');
     expect(loaded?.candidates).toHaveLength(1);
     expect(loaded?.candidates?.[0]).toMatchObject({ id: 'c1', featureType: 'bench', observationIds: ['o1'] });
     // gpsSamples are returned in timestamp order
-    expect(loaded?.gpsSamples?.map((g) => g.id)).toEqual(['g1', 'g2']);
+    expect(loaded?.gpsSamples?.map((g) => g.id)).toEqual(['g1a', 'g1b']);
+  });
+
+  it('migrates every legacy survey row, not only the first (issue #7)', async () => {
+    const idb = new IDBFactory();
+    // v1 database with THREE legacy full-Survey rows.
+    const db1 = await openDb(idb, 1, createV1Stores);
+    const legacy = [1, 2, 3].map((n) => makeLegacySurvey(n, `Legacy walk ${n}`));
+    await putAll(db1, 'surveys', 'readwrite', legacy.map((l) => l.survey));
+    db1.close();
+
+    await freshModule(idb);
+
+    // All three surveys survive the migration and are listed.
+    const metas = await surveyDb.listSurveys();
+    expect(metas.map((m) => m.id).sort()).toEqual(['s1', 's2', 's3']);
+    expect(metas.every((m) => !('photos' in m) && !('gpsSamples' in m) && !('candidates' in m))).toBe(true);
+
+    // Every raw row in the surveys store is metadata-only.
+    const db2 = await openDb(idb, 2, () => {});
+    const rawRows = await getAllRows<Record<string, unknown>>(db2, 'surveys');
+    expect(rawRows).toHaveLength(3);
+    for (const row of rawRows) {
+      expect('photos' in row).toBe(false);
+      expect('gpsSamples' in row).toBe(false);
+      expect('candidates' in row).toBe(false);
+    }
+    db2.close();
+
+    // Every survey remains loadable with its child records intact.
+    for (let n = 1; n <= 3; n++) {
+      const loaded = await surveyDb.loadSurvey(`s${n}`);
+      expect(loaded).toBeDefined();
+      expect(loaded?.name).toBe(`Legacy walk ${n}`);
+      expect(loaded?.gpsSamples).toHaveLength(2);
+      expect(loaded?.photos).toHaveLength(1);
+      expect(loaded?.photos?.[0].image).toBe(`data:image/jpeg;base64,VERYLARGE${n}`);
+      expect(loaded?.candidates).toHaveLength(1);
+      expect(loaded?.candidates?.[0].id).toBe(`c${n}`);
+    }
   });
 
   it('keeps list/load/delete flows working after migration', async () => {
     const idb = new IDBFactory();
     const db1 = await openDb(idb, 1, createV1Stores);
-    const { survey } = makeLegacySurvey();
+    const { survey } = makeLegacySurvey(1);
     await putAll(db1, 'surveys', 'readwrite', [survey]);
     db1.close();
 

@@ -103,6 +103,9 @@ function openDB(): Promise<IDBDatabase> {
             for (const c of cands) upgradeTx.objectStore(STORES.candidates).put(c);
           }
           cur.update(metaOnly(row));
+          // Advance the cursor so every legacy survey row is migrated, not
+          // just the first one (issue #7).
+          cur.continue();
         };
       }
     };
