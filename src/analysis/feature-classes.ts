@@ -10,11 +10,15 @@ import type { Observation } from '../types';
  * Schema (issue #5): required primary tags vs. optional inferred attributes.
  *  - requiredTags: the tags that define the feature; always applied by
  *    default. A node carrying these is a valid instance of the class.
- *  - suggestedTags: optional subtype/detail attributes. NEVER applied by
- *    default — they are surfaced as suggestions in the review UI and only
- *    added when analysis or the reviewer confirms them from the photo.
- *    (E.g. `bicycle_parking=frame` is a detail tag; the primary tag is
- *    `amenity=bicycle_parking`.)
+ *  - suggestedTags: optional subtype/detail attributes with a concrete
+ *    inferred value. NEVER applied by default — surfaced as suggestions in
+ *    the review UI and only added when analysis or the reviewer confirms
+ *    them from the photo. (E.g. `bicycle_parking=frame` is a detail tag; the
+ *    primary tag is `amenity=bicycle_parking`.)
+ *  - commonValues: known-allowed values for a tag whose value CANNOT be
+ *    inferred from the class alone (e.g. `playground=<type>`). Offered in
+ *    the review UI as a value picker; never applied by default and never
+ *    guessed. They also make the key searchable/score-able in OSM lookups.
  */
 export interface FeatureClass {
   id: string;
@@ -23,6 +27,9 @@ export interface FeatureClass {
   requiredTags: Record<string, string>;
   /** Optional detail attributes (suggested only; reviewer/analysis confirms). */
   suggestedTags: Record<string, string>;
+  /** Tag keys with a set of known-allowed values, none of which may be
+   *  guessed (review-time value picker only). */
+  commonValues?: Record<string, string[]>;
   /** Short human description of what to look for. */
   hint: string;
 }
@@ -48,9 +55,15 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     // An individual piece of equipment is a node tagged playground=<type>;
     // leisure=playground marks the playground AREA (way/area), not the
     // equipment. The equipment type cannot be guessed: it must come from
-    // analysis or the reviewer (see suggestedTags).
+    // analysis or the reviewer, who picks from the known-allowed values.
     requiredTags: {},
-    suggestedTags: { playground: 'slide' },
+    suggestedTags: {},
+    commonValues: {
+      playground: [
+        'slide', 'swing', 'roundabout', 'spring_loader', 'climbing_frame',
+        'sandbox', 'other'
+      ]
+    },
     hint: 'A single piece of playground equipment (node). Set playground=<type> from the photo.',
   },
   {
@@ -117,6 +130,23 @@ export function defaultTagsFor(featureType: string): Record<string, string> {
 export function suggestedTagsFor(featureType: string): Record<string, string> {
   const cls = getFeatureClass(featureType);
   return cls ? { ...cls.suggestedTags } : {};
+}
+
+/** Known-allowed values per tag for a feature class (value picker, review-time). */
+export function commonValuesFor(featureType: string): Record<string, string[]> {
+  const cls = getFeatureClass(featureType);
+  return cls?.commonValues ? { ...cls.commonValues } : {};
+}
+
+/** All tag keys that identify/search for a class: required + suggested + common. */
+export function definingKeysFor(featureType: string): string[] {
+  const cls = getFeatureClass(featureType);
+  if (!cls) return [];
+  return [...new Set([
+    ...Object.keys(cls.requiredTags),
+    ...Object.keys(cls.suggestedTags),
+    ...Object.keys(cls.commonValues ?? {})
+  ])];
 }
 
 /** Merge tag suggestions from several observations of the same object. */

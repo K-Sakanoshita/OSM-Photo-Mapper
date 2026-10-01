@@ -1,5 +1,5 @@
 import type { FeatureCandidate, OsmMatch } from '../types';
-import { FEATURE_CLASSES, getFeatureClass } from '../analysis/feature-classes';
+import { FEATURE_CLASSES, definingKeysFor, getFeatureClass } from '../analysis/feature-classes';
 import { distanceMeters } from '../analysis/position';
 
 /**
@@ -18,8 +18,8 @@ import { distanceMeters } from '../analysis/position';
  *    track samples, photo positions and candidate positions, plus padding),
  *    not just the last GPS point — long walks no longer miss objects
  *    photographed earlier.
- *  - Coordinates are always usable: nodes carry lat/lon and ways/relations
- *    carry `center` in `out tags center` output.
+ *  - Coordinates are always usable: the query uses `out body center`, so
+ *    nodes carry lat/lon and ways/relations carry `center`.
  *  - Match scoring is feature-class-aware: each candidate is scored against
  *    ITS OWN class only, so a bench can no longer rank highly as a
  *    vending-machine match.
@@ -30,7 +30,7 @@ const DEFAULT_RADIUS_M = 120;
 /** Padding around the survey area so objects just outside sampled points are found. */
 const AREA_PADDING_M = 150;
 
-interface OverpassElement {
+export interface OverpassElement {
   type: 'node' | 'way' | 'relation';
   id: number;
   lat?: number;
@@ -63,6 +63,7 @@ function escRegex(v: string): string {
  */
 export function buildTagClauses(): string[] {
   const byKey = new Map<string, Set<string>>();
+  const presenceKeys = new Set<string>();
   for (const cls of FEATURE_CLASSES) {
     for (const [k, v] of Object.entries(cls.requiredTags)) {
       const set = byKey.get(k) ?? new Set<string>();
@@ -70,11 +71,10 @@ export function buildTagClauses(): string[] {
       byKey.set(k, set);
     }
     // Classes with no required tags (e.g. playground equipment) are still
-    // searched by key presence, so existing objects can be found and linked.
+    // searched by key presence of their defining keys (suggested +
+    // common-value keys), so existing objects can be found and linked.
     if (Object.keys(cls.requiredTags).length === 0) {
-      for (const k of Object.keys(cls.suggestedTags)) {
-        if (!byKey.has(k)) byKey.set(k, new Set<string>());
-      }
+      for (const k of definingKeysFor(cls.id)) presenceKeys.add(k);
     }
   }
 
@@ -88,6 +88,10 @@ export function buildTagClauses(): string[] {
       const alts = [...values].map(escRegex).join('|');
       clauses.push(`["${key}"~"^(${alts})$"]`);
     }
+  }
+  // Key-presence clauses for defining keys that carry no exact/alt values.
+  for (const key of presenceKeys) {
+    if (!byKey.has(key)) clauses.push(`["${key}"~".+"]`);
   }
   return clauses;
 }
@@ -104,7 +108,10 @@ export function buildQueryForArea(
   // Query both nodes and ways (playgrounds are often ways; "out center" uses
   // the way centroid). Relations are out of scope for the MVP node features.
   const selectors = clauses.flatMap((c) => [`node(${box})${c};`, `way(${box})${c};`]).join('\n');
-  return `[out:json][timeout:25];(${selectors});out tags center;`;
+  // `out body center`: full element bodies (nodes incl. lat/lon, ways incl.
+  // nodes) plus a centroid for ways/relations — so every returned element has
+  // usable coordinates.
+  return `[out:json][timeout:25];(${selectors});out body center;`;
 }
 
 /** Bounding box (degrees) around the given points with padding (meters). */
@@ -151,8 +158,8 @@ export function scoreTagsForClass(tags: Record<string, string>, featureType: str
   }
 
   // No required tags (e.g. playground equipment, type must come from review):
-  // match on key presence of the class's defining keys.
-  const keys = Object.keys(cls.suggestedTags);
+  // match on key presence of the class's defining keys (suggested + common).
+  const keys = definingKeysFor(featureType);
   if (keys.length === 0) return 0;
   const hits = keys.filter((k) => k in tags).length;
   return hits / keys.length;
@@ -182,7 +189,13 @@ export async function fetchOsmInArea(points: LatLon[], paddingM = AREA_PADDING_M
   }
 }
 
-function toOsmMatch(el: OverpassElement): OsmMatch | null {
+/**
+ * Convert an Overpass element into an OsmMatch.
+ * Exported for tests: nodes carry lat/lon directly; ways/relations use
+ * `center` (the query requests `out body center`). Elements with neither are
+ * dropped (null).
+ */
+export function toOsmMatch(el: OverpassElement): OsmMatch | null {
   // Nodes carry lat/lon directly; ways/relations use `center` (out ... center).
   const matchLat = el.lat ?? el.center?.lat;
   const matchLon = el.lon ?? el.center?.lon;

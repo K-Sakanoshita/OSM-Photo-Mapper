@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   FEATURE_CLASSES,
+  commonValuesFor,
   defaultTagsFor,
+  definingKeysFor,
   getFeatureClass,
   mergeTags,
   suggestedTagsFor
@@ -29,11 +31,27 @@ describe('feature class presets (issue #5)', () => {
     expect('bicycle_parking' in defaultTagsFor('bicycle_parking')).toBe(false);
   });
 
-  it('playground equipment carries NO default type tag (type must come from analysis/review)', () => {
+  it('playground equipment carries NO default/guessed type tag (type must come from analysis/review)', () => {
     expect(defaultTagsFor('playground')).toEqual({});
-    expect(suggestedTagsFor('playground')).toEqual({ playground: 'slide' });
+    // No value may be guessed as a suggestion either — the type is unknown.
+    expect(suggestedTagsFor('playground')).toEqual({});
     const cls = getFeatureClass('playground');
     expect(Object.keys(cls?.requiredTags ?? {})).toHaveLength(0);
+    // ...but the known-allowed values are offered as a review-time picker.
+    const common = commonValuesFor('playground');
+    expect(common.playground).toEqual(
+      expect.arrayContaining(['slide', 'swing', 'roundabout', 'sandbox', 'other'])
+    );
+    expect(common.playground).toContain('slide');
+  });
+
+  it('definingKeysFor covers required + suggested + common-value keys', () => {
+    expect(definingKeysFor('playground')).toEqual(['playground']);
+    expect(definingKeysFor('bicycle_parking')).toEqual(
+      expect.arrayContaining(['amenity', 'bicycle_parking'])
+    );
+    expect(definingKeysFor('bench')).toEqual(['amenity']);
+    expect(definingKeysFor('nope')).toEqual([]);
   });
 
   it('vending machine defaults to amenity=vending_machine', () => {
@@ -45,10 +63,14 @@ describe('feature class presets (issue #5)', () => {
     expect(suggestedTagsFor('nope')).toEqual({});
   });
 
-  it('required and suggested keys never overlap within a class', () => {
+  it('required keys never overlap with suggested or common-value keys within a class', () => {
     for (const cls of FEATURE_CLASSES) {
       for (const k of Object.keys(cls.requiredTags)) {
-        expect(k in cls.suggestedTags, `${cls.id}: key ${k} in both sets`).toBe(false);
+        expect(k in cls.suggestedTags, `${cls.id}: key ${k} in required+suggested`).toBe(false);
+        expect(
+          k in (cls.commonValues ?? {}),
+          `${cls.id}: key ${k} in required+commonValues`
+        ).toBe(false);
       }
     }
   });

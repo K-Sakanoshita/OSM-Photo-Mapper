@@ -38,10 +38,14 @@ export interface Photo {
   timestampSource?: TimestampSource;
   /** JPEG image data (base64) or a pointer; kept out of the index for MVP. */
   image?: string;
-  /** Nearest GPS sample at capture time. */
+  /** Track sample (or interpolation between samples) at capture time. */
   gps?: GpsSample;
-  /** Camera/device heading at capture, degrees (when available). */
+  /** Camera heading at capture, degrees (when available). */
   heading?: number;
+  /** Provenance of `heading`: interpolated from the GPS track at capture
+   *  time ('track') or the device compass at file-picker return ('device',
+   *  a weaker fallback that can lag the true capture moment). */
+  headingSource?: 'track' | 'device';
   /** Free-form field note. */
   note?: string;
 }
@@ -88,6 +92,31 @@ export interface OsmMatch {
 export type CandidateStatus = 'new' | 'existing' | 'excluded';
 
 /** A merged, reviewable map feature derived from one or more observations. */
+/** One provenance entry for a position solution (issue #8). */
+export interface PositionEvidence {
+  source: 'gps-track' | 'ray-projection' | 'aerial-structure' | 'osm-object';
+  label: string;
+  detail?: string;
+}
+
+/**
+ * Full provenance chain for a candidate's position (issue #8):
+ * ground-survey estimate -> bounded aerial refinement -> conditional OSM snap.
+ * The raw estimate is never discarded.
+ */
+export interface PositionSolution {
+  estimatedPosition: { lat: number; lon: number };
+  /** Bounded imagery-based correction (a few meters at most). */
+  refinedPosition?: { lat: number; lon: number };
+  /** OSM object position; set only when the snap is strong and unique. */
+  snappedPosition?: { lat: number; lon: number };
+  linkedOsmId?: number;
+  /** Position uncertainty in meters (drives refinement/snap bounds). */
+  uncertaintyMeters: number;
+  evidence: PositionEvidence[];
+  snapConfidence?: number;
+}
+
 export interface FeatureCandidate {
   id: string;
   surveyId: string;
@@ -113,6 +142,9 @@ export interface FeatureCandidate {
   name?: string;
   /** OSM id the reviewer linked this candidate to (for 'existing'). */
   linkedOsmId?: number;
+  /** Provenance chain for the position (issue #8); provenance only —
+   *  `lat`/`lon` remain the working position used for display/export. */
+  positionSolution?: PositionSolution;
 }
 
 /**

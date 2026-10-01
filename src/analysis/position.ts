@@ -216,10 +216,17 @@ function clamp01(v: number): number {
 /**
  * Associate a timestamp with the GPS track.
  *
- * Returns the track sample nearest `at` (epoch ms). When `at` falls strictly
- * between two samples, the position is linearly interpolated between them
- * (bearing/rate interpolation over short walking intervals is a good
- * approximation), which avoids snapping the photo to a seconds-old fix.
+ * Finds the samples that truly bracket `at` (the last sample at or before
+ * `at` and the first sample after it) via binary search, then linearly
+ * interpolates between exactly that pair (bearing/rate interpolation over
+ * short walking intervals is a good approximation). This avoids both
+ * snapping the photo to a seconds-old fix and interpolating across the wrong
+ * interval (e.g. picking the *nearest* sample first and then pairing it with
+ * its predecessor can select the A-B interval when the capture is actually
+ * between B and C).
+ *
+ * Out-of-range timestamps return the nearest endpoint sample unchanged; an
+ * exact sample hit returns that sample unchanged.
  *
  * Note: this yields the CAMERA position at capture time. It is never used as
  * the target object's coordinate (that is the position estimator's job).
@@ -229,45 +236,45 @@ export function trackPositionAt(
   at: number
 ): GpsSample | undefined {
   if (samples.length === 0) return undefined;
-  if (samples.length === 1) return samples[0];
 
   // Samples are assumed sorted by timestamp (they are, per surveyDb.loadSurvey).
-  let best = samples[0];
-  let bestDt = Math.abs(samples[0].timestamp - at);
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  if (at <= first.timestamp) return first;
+  if (at >= last.timestamp) return last;
+
+  // Binary search: index of the FIRST sample with timestamp > at.
   let lo = 0;
-  let hi = samples.length - 1;
-  for (let i = 1; i < samples.length; i++) {
-    const dt = Math.abs(samples[i].timestamp - at);
-    if (dt < bestDt) {
-      best = samples[i];
-      bestDt = dt;
-      lo = i - 1;
-      hi = i;
-    }
+  let hi = samples.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].timestamp > at) hi = mid;
+    else lo = mid + 1;
+  }
+  const a = samples[lo - 1]; // last sample at or before `at`
+  const b = samples[lo]; // first sample after `at`
+
+  const span = b.timestamp - a.timestamp;
+  if (span <= 0) {
+    // Duplicate timestamps: no interval to interpolate across.
+    return Math.abs(a.timestamp - at) <= Math.abs(b.timestamp - at) ? a : b;
   }
 
-  const a = samples[lo];
-  const b = samples[hi];
-  const span = b.timestamp - a.timestamp;
-  // Between two distinct samples: interpolate lat/lon (and heading when both known).
-  if (span > 0 && a.timestamp <= at && at <= b.timestamp && a.id !== b.id) {
-    const t = (at - a.timestamp) / span;
-    if (t <= 0) return a;
-    if (t >= 1) return b;
-    return {
-      id: `gps-interp-${at}`,
-      lat: a.lat + (b.lat - a.lat) * t,
-      lon: a.lon + (b.lon - a.lon) * t,
-      accuracy: Math.max(a.accuracy, b.accuracy),
-      timestamp: at,
-      speed: a.speed != null && b.speed != null ? a.speed + (b.speed - a.speed) * t : undefined,
-      heading:
-        a.heading != null && b.heading != null
-          ? interpolateHeading(a.heading, b.heading, t)
-          : a.heading ?? b.heading
-    };
-  }
-  return best;
+  const t = (at - a.timestamp) / span; // in (0, 1]; t === 1 cannot occur (b is after `at`)
+  if (t === 0) return a; // exact hit on sample a
+
+  return {
+    id: `gps-interp-${at}`,
+    lat: a.lat + (b.lat - a.lat) * t,
+    lon: a.lon + (b.lon - a.lon) * t,
+    accuracy: Math.max(a.accuracy, b.accuracy), // conservative: worst of the pair
+    timestamp: at,
+    speed: a.speed != null && b.speed != null ? a.speed + (b.speed - a.speed) * t : undefined,
+    heading:
+      a.heading != null && b.heading != null
+        ? interpolateHeading(a.heading, b.heading, t)
+        : a.heading ?? b.heading
+  };
 }
 
 /** Shortest-arc interpolation between two bearings, degrees. */

@@ -19,9 +19,14 @@ import { surveyDb } from '../db/survey-db';
  * The source is recorded on the photo (Photo.timestampSource) so the review
  * UI can flag low-quality associations.
  *
- * GPS association: the photo is matched to the track sample (or the
- * interpolated position between samples) nearest the capture time — not the
- * newest sample at selection time.
+ * GPS association: the photo is matched to the track position at the true
+ * capture time (the bracketing samples are interpolated) — not the newest
+ * sample at selection time.
+ *
+ * Heading (issue #6): the heading interpolated from the track AT CAPTURE
+ * TIME is preferred. The device heading at file-picker return is only an
+ * explicit fallback (used when the track has no heading); the provenance is
+ * recorded via Photo.headingSource.
  *
  * EXIF GPS coordinates are deliberately IGNORED: they describe the camera
  * position, not the target object, and using them would bias object
@@ -33,6 +38,8 @@ export interface CapturedPhotoInput {
   file: File;
   /** The survey's GPS track (chronological); used to place the photo in time. */
   track: GpsSample[];
+  /** Device compass heading at file-picker return. Fallback only: the
+   *  track heading at capture time takes precedence when available. */
   heading?: number;
   note?: string;
 }
@@ -127,9 +134,18 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
     timestampSource: source,
     image,
     gps,
-    heading: input.heading,
     note: input.note
   };
+
+  // Prefer the heading associated with the capture-time track position;
+  // fall back to the runtime device heading only when the track has none.
+  if (gps?.heading != null) {
+    photo.heading = gps.heading;
+    photo.headingSource = 'track';
+  } else if (input.heading != null) {
+    photo.heading = input.heading;
+    photo.headingSource = 'device';
+  }
 
   await surveyDb.addPhoto(input.surveyId, photo);
   return photo;

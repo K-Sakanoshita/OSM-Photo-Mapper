@@ -145,6 +145,11 @@ export class MockAnalyzer implements FeatureAnalyzer {
       lon = est.lon;
       positionConfidence = est.positionConfidence;
       warnings.push(...est.warnings);
+      // Issue #5: weakly-determined positions must be flagged, not silently
+      // snapped, so reviewers verify them before mapping.
+      if (positionConfidence < 0.35) {
+        warnings.push('Position is a low-confidence estimate — verify before mapping.');
+      }
     } else {
       warnings.push('No usable GPS position for this observation.');
     }

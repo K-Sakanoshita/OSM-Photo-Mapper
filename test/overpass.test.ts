@@ -5,7 +5,9 @@ import {
   buildQueryForArea,
   buildTagClauses,
   scoreTagsForClass,
-  type LatLon
+  toOsmMatch,
+  type LatLon,
+  type OverpassElement
 } from '../src/osm/overpass';
 import type { OsmMatch } from '../src/types';
 import { distanceMeters } from '../src/analysis/position';
@@ -40,15 +42,61 @@ describe('buildTagClauses (issue #5)', () => {
 });
 
 describe('buildQueryForArea (issue #5)', () => {
-  it('queries node/way/area for all clauses inside the bbox', () => {
+  it('queries node and way selectors for all clauses inside the bbox', () => {
     const q = buildQueryForArea(48.80, 2.20, 48.82, 2.24);
     expect(q).toContain('[out:json][timeout:25]');
     expect(q).toContain('48.800000,2.200000,48.820000,2.240000');
-    expect(q).toContain('out tags center;');
-    // one node selector per clause
+    // `out body center` so nodes carry lat/lon and ways carry a centroid —
+    // every returned element must yield usable coordinates (issue #5).
+    expect(q).toContain('out body center;');
+    expect(q).not.toContain('out tags');
     // one node + one way selector per clause
     expect(q.match(/node\(/g)?.length).toBe(buildTagClauses().length);
     expect(q.match(/way\(/g)?.length).toBe(buildTagClauses().length);
+  });
+});
+
+describe('toOsmMatch (issue #5: node lat/lon vs way center)', () => {
+  it('maps a node element using its own lat/lon', () => {
+    const el: OverpassElement = {
+      type: 'node',
+      id: 55,
+      lat: 48.8123,
+      lon: 2.3321,
+      tags: { amenity: 'bench' }
+    };
+    expect(toOsmMatch(el)).toEqual({
+      osmType: 'node',
+      osmId: 55,
+      lat: 48.8123,
+      lon: 2.3321,
+      tags: { amenity: 'bench' },
+      matchScore: 0
+    });
+  });
+
+  it('maps a way element using its centroid (out body center)', () => {
+    const el: OverpassElement = {
+      type: 'way',
+      id: 77,
+      center: { lat: 48.85, lon: 2.35 },
+      tags: { playground: 'slide' }
+    };
+    const m = toOsmMatch(el);
+    expect(m?.osmType).toBe('way');
+    expect(m?.osmId).toBe(77);
+    expect(m?.lat).toBe(48.85);
+    expect(m?.lon).toBe(2.35);
+    expect(m?.tags).toEqual({ playground: 'slide' });
+  });
+
+  it('drops elements without usable coordinates', () => {
+    expect(toOsmMatch({ type: 'way', id: 88, tags: { amenity: 'bench' } })).toBeNull();
+    expect(toOsmMatch({ type: 'node', id: 99, tags: {} })).toBeNull();
+  });
+
+  it('defaults missing tags to an empty object', () => {
+    expect(toOsmMatch({ type: 'node', id: 1, lat: 10, lon: 20 })?.tags).toEqual({});
   });
 });
 

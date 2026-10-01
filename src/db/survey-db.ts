@@ -53,7 +53,8 @@ function openDB(): Promise<IDBDatabase> {
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (ev: IDBVersionChangeEvent) => {
-      const db = ev.target as IDBDatabase;
+      // ev.target is the IDBOpenDBRequest; the database is req.result.
+      const db = req.result;
       if (!db.objectStoreNames.contains(STORES.surveys)) {
         db.createObjectStore(STORES.surveys, { keyPath: 'id' });
       }
@@ -78,18 +79,30 @@ function openDB(): Promise<IDBDatabase> {
       // v1 -> v2: legacy survey rows stored the full Survey (photos include
       // image data URLs), duplicating large payloads and risking stale child
       // arrays in the metadata row. Strip them down to metadata-only rows.
-      if ((ev.oldVersion ?? 0) < 2) {
-        const s = db.transaction(STORES.surveys, 'readwrite').objectStore(STORES.surveys);
-        const cursorReq = s.openCursor();
+      //
+      // IMPORTANT: the upgrade already runs inside the versionchange
+      // transaction. Opening a *separate* transaction here (db.transaction)
+      // aborts the versionchange and fails the whole open with
+      // "Version change transaction was aborted". Use req.transaction.
+      if ((ev.oldVersion ?? 0) > 0 && (ev.oldVersion ?? 0) < 2) {
+        const upgradeTx = req.transaction!;
+        const surveys = upgradeTx.objectStore(STORES.surveys);
+        const cursorReq = surveys.openCursor();
         cursorReq.onsuccess = (e: Event) => {
-          const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result as IDBCursorWithValue | null;
-          if (cur) {
-            const row = cur.value as Survey;
-            if (row.photos !== undefined || row.gpsSamples !== undefined || row.candidates !== undefined) {
-              void s.put(metaOnly(row));
-            }
-            cur.continue();
+          const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+          if (!cur) return;
+          const row = cur.value as Survey;
+          const photos = row.photos ?? [];
+          const gps = row.gpsSamples ?? [];
+          const cands = row.candidates ?? [];
+          if (photos.length || gps.length || cands.length) {
+            // Defensive upsert: v1 already wrote child records to their own
+            // stores, but guarantee anything embedded-only is preserved.
+            for (const p of photos) upgradeTx.objectStore(STORES.photos).put(p);
+            for (const g of gps) upgradeTx.objectStore(STORES.gps).put(g);
+            for (const c of cands) upgradeTx.objectStore(STORES.candidates).put(c);
           }
+          cur.update(metaOnly(row));
         };
       }
     };

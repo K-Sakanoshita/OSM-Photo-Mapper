@@ -280,6 +280,17 @@ body[data-mode='upload'] #content { display: block; }
   font-size: 12px;
   font-family: inherit;
 }
+.solution-row { align-items: flex-start; flex-wrap: wrap; }
+.ev-chip {
+  display: inline-block;
+  background: #eef7ee;
+  color: #2e6b34;
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
 .add-tag-row {
   display: flex;
   align-items: center;

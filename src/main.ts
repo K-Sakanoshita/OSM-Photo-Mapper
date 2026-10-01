@@ -7,12 +7,17 @@ import { capturePhoto } from './capture/photo';
 import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
-import { getFeatureClass, suggestedTagsFor } from './analysis/feature-classes';
+import { commonValuesFor, getFeatureClass, suggestedTagsFor } from './analysis/feature-classes';
+import { refinePosition } from './analysis/structural-refine';
+import { decideSnap } from './analysis/snap-decision';
+import { distanceMeters } from './analysis/position';
+import { gsiProvider } from './imagery/providers';
 import type {
   CandidateStatus,
   FeatureCandidate,
   Observation,
   OsmMatch,
+  PositionSolution,
   Survey
 } from './types';
 
@@ -450,6 +455,58 @@ class App {
         c.osmMatches = annotateCandidate(c, nearby, 120);
       }
 
+      // Issue #8: PositionSolution provenance chain.
+      // 1) raw ground-survey estimate (always kept) -> 2) bounded aerial
+      // structural refinement (few meters, capped by uncertainty) ->
+      // 3) conditional OSM snap (only strong + essentially unique).
+      for (const c of result.candidates) {
+        if (c.lat == null || c.lon == null) continue;
+        const est = { lat: c.lat, lon: c.lon };
+        const uncertainty = 3 + (1 - c.positionConfidence) * 30; // 3..33 m
+        const solution: PositionSolution = {
+          estimatedPosition: est,
+          uncertaintyMeters: uncertainty,
+          evidence: [
+            { source: 'ray-projection', label: `Ray projection (${c.observationIds.length} observation(s))` }
+          ]
+        };
+
+        const refined = await refinePosition(gsiProvider, c.featureType, est.lat, est.lon, uncertainty);
+        if (refined) {
+          solution.refinedPosition = { lat: refined.lat, lon: refined.lon };
+          solution.evidence.push(refined.evidence);
+        }
+
+        const base = refined ? { lat: refined.lat, lon: refined.lon } : est;
+        const snap = decideSnap({
+          lat: base.lat,
+          lon: base.lon,
+          featureType: c.featureType,
+          uncertaintyM: uncertainty,
+          matches: c.osmMatches
+        });
+
+        c.positionSolution = solution;
+
+        if (snap) {
+          solution.snappedPosition = snap.snappedPosition;
+          solution.linkedOsmId = snap.osm.osmId;
+          solution.snapConfidence = snap.confidence;
+          solution.evidence.push(snap.evidence);
+          c.lat = snap.snappedPosition.lat;
+          c.lon = snap.snappedPosition.lon;
+          c.linkedOsmId = snap.osm.osmId;
+          c.status = 'existing';
+          c.warnings.push(
+            `Snapped to ${snap.osm.osmType}/${snap.osm.osmId} (${Math.round(snap.confidence * 100)}% confidence) — verify the match.`
+          );
+        } else if (refined) {
+          c.lat = base.lat;
+          c.lon = base.lon;
+          c.warnings.push(`Position refined ${refined.deltaM.toFixed(1)} m by aerial structure — verify against the photos.`);
+        }
+      }
+
       await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
       fresh.candidates = result.candidates;
       this.survey = fresh;
@@ -554,6 +611,25 @@ class App {
     }
     card.append(posRow);
 
+    // Issue #8: position solution provenance (estimate → refined → snapped).
+    const ps = c.positionSolution;
+    if (ps && c.lat != null && c.lon != null) {
+      const steps: string[] = [];
+      steps.push(`estimate ${ps.estimatedPosition.lat.toFixed(5)}, ${ps.estimatedPosition.lon.toFixed(5)}`);
+      if (ps.refinedPosition) {
+        const d = distanceMeters(ps.estimatedPosition.lat, ps.estimatedPosition.lon, ps.refinedPosition.lat, ps.refinedPosition.lon);
+        steps.push(`refined +${d.toFixed(1)} m`);
+      }
+      if (ps.snappedPosition && ps.linkedOsmId != null) {
+        steps.push(`snapped → osm/${ps.linkedOsmId} (${Math.round((ps.snapConfidence ?? 0) * 100)}%)`);
+      }
+      const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
+      for (const e of ps.evidence) {
+        solRow.append(el('span', { class: 'ev-chip', title: e.detail ?? e.label }, e.label));
+      }
+      card.append(solRow);
+    }
+
     card.append(
       el(
         'div',
@@ -587,6 +663,25 @@ class App {
           )
         )
       );
+    }
+
+    // Known-allowed values that must NOT be guessed (issue #5): offer a
+    // value picker for defining keys the candidate has not set yet.
+    const common = Object.entries(commonValuesFor(c.featureType)).filter(
+      ([k]) => c.tags[k] == null
+    );
+    if (common.length > 0) {
+      const picks = common.map(([k, values]) => {
+        const sel = el(
+          'select',
+          { class: 'common-sel', 'aria-label': `Value for ${k}` },
+          el('option', { value: '' }, `${k}=? (only if visible)`),
+          ...values.map((v) => el('option', { value: v }, v))
+        );
+        sel.onchange = () => void this.onCommonValueChanged(c, k, sel);
+        return sel;
+      });
+      card.append(el('div', { class: 'suggest-row' }, 'Set value (only if visible in photo):', ...picks));
     }
 
     const nameInput = el('input', {
@@ -687,6 +782,15 @@ class App {
   }
 
   /** Add one reviewer-confirmed suggested (optional) tag. */
+  /** Reviewer picked a known-allowed value for a not-guessable tag key. */
+  private async onCommonValueChanged(c: FeatureCandidate, key: string, sel: HTMLSelectElement): Promise<void> {
+    const v = sel.value;
+    if (v === '') delete c.tags[key];
+    else c.tags[key] = v;
+    await surveyDb.updateCandidate(c);
+    if (this.mode === 'review') this.render();
+  }
+
   private async onAddSuggestedTag(c: FeatureCandidate, k: string, v: string): Promise<void> {
     c.tags[k] = v;
     await surveyDb.updateCandidate(c);
