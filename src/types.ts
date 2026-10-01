@@ -77,9 +77,15 @@ export interface Observation {
   tagConfidence: number;
 }
 
+/**
+ * OSM object type. Node, way and relation IDs are independent namespaces,
+ * so a linked object is always identified by type + ID together (issue #4).
+ */
+export type OsmType = 'node' | 'way' | 'relation';
+
 /** A nearby existing OSM object relevant to a candidate. */
 export interface OsmMatch {
-  osmType: 'node' | 'way' | 'relation';
+  osmType: OsmType;
   osmId: number;
   lat: number;
   lon: number;
@@ -111,6 +117,8 @@ export interface PositionSolution {
   /** OSM object position; set only when the snap is strong and unique. */
   snappedPosition?: { lat: number; lon: number };
   linkedOsmId?: number;
+  /** Type of the linked OSM object (issue #4: identity is type + ID). */
+  linkedOsmType?: OsmType;
   /** Position uncertainty in meters (drives refinement/snap bounds). */
   uncertaintyMeters: number;
   evidence: PositionEvidence[];
@@ -142,6 +150,8 @@ export interface FeatureCandidate {
   name?: string;
   /** OSM id the reviewer linked this candidate to (for 'existing'). */
   linkedOsmId?: number;
+  /** Type of the linked OSM object (issue #4: identity is type + ID). */
+  linkedOsmType?: OsmType;
   /** Provenance chain for the position (issue #8); provenance only —
    *  `lat`/`lon` remain the working position used for display/export. */
   positionSolution?: PositionSolution;

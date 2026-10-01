@@ -159,6 +159,20 @@ function getAll<T>(store: StoreName): Promise<T[]> {
   );
 }
 
+/**
+ * Issue #4: a linked object is identified by type + ID, but rows linked
+ * before `linkedOsmType` existed only carry the ID. Resolve the type from
+ * the stored osmMatches (falling back to 'node' — the only type the legacy
+ * exporter could modify).
+ */
+function backfillLinkedOsmType(candidates: FeatureCandidate[]): FeatureCandidate[] {
+  return candidates.map((c) => {
+    if (c.linkedOsmId == null || c.linkedOsmType != null) return c;
+    const type = c.osmMatches.find((m) => m.osmId === c.linkedOsmId)?.osmType ?? 'node';
+    return { ...c, linkedOsmType: type };
+  });
+}
+
 export const surveyDb = {
   /** Create a new (empty) survey. Only metadata goes into the surveys store. */
   async createSurvey(survey: Survey): Promise<void> {
@@ -195,7 +209,7 @@ export const surveyDb = {
       ...meta,
       gpsSamples: gps.sort((a, b) => a.timestamp - b.timestamp),
       photos: photos.sort((a, b) => a.timestamp - b.timestamp),
-      candidates
+      candidates: backfillLinkedOsmType(candidates)
     };
   },
 

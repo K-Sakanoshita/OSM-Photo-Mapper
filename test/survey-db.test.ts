@@ -122,6 +122,70 @@ beforeEach(async () => {
   await freshModule(new IDBFactory());
 });
 
+/** A linked candidate as stored before `linkedOsmType` existed. */
+function legacyLinkedCandidate(surveyId: string, id: string, osmId: number, matches: FeatureCandidate['osmMatches']): FeatureCandidate {
+  return {
+    id,
+    surveyId,
+    featureType: 'bench',
+    lat: 48.8005,
+    lon: 2.3005,
+    positionConfidence: 0.5,
+    tagConfidence: 0.5,
+    tags: { amenity: 'bench' },
+    observationIds: [],
+    osmMatches: matches,
+    warnings: [],
+    status: 'existing',
+    linkedOsmId: osmId
+  };
+}
+
+describe('linkedOsmType backfill (issue #4)', () => {
+  it('resolves linkedOsmType from osmMatches for legacy linked candidates', async () => {
+    await surveyDb.createSurvey({
+      id: 's1', name: 'Backfill', createdAt: 1, recording: false,
+      gpsSamples: [], photos: [], candidates: []
+    });
+    const cand = legacyLinkedCandidate('s1', 'cand-legacy', 4242, [
+      { osmType: 'way', osmId: 4242, distanceM: 3.1, tags: { highway: 'footway' }, name: 'Path' },
+      { osmType: 'node', osmId: 777, distanceM: 5.0, tags: { amenity: 'bench' } }
+    ]);
+    await surveyDb.updateCandidate(cand);
+
+    const loaded = (await surveyDb.loadSurvey('s1'))!.candidates.find((c) => c.id === 'cand-legacy');
+    expect(loaded).toBeDefined();
+    expect(loaded!.linkedOsmId).toBe(4242);
+    expect(loaded!.linkedOsmType).toBe('way');
+  });
+
+  it('falls back to node when the linked ID is not in osmMatches', async () => {
+    await surveyDb.createSurvey({
+      id: 's1', name: 'Backfill 2', createdAt: 1, recording: false,
+      gpsSamples: [], photos: [], candidates: []
+    });
+    await surveyDb.updateCandidate(legacyLinkedCandidate('s1', 'cand-legacy2', 4242, []));
+
+    const loaded = (await surveyDb.loadSurvey('s1'))!.candidates.find((c) => c.id === 'cand-legacy2');
+    expect(loaded!.linkedOsmType).toBe('node');
+  });
+
+  it('leaves explicit linkedOsmType values untouched', async () => {
+    await surveyDb.createSurvey({
+      id: 's1', name: 'Backfill 3', createdAt: 1, recording: false,
+      gpsSamples: [], photos: [], candidates: []
+    });
+    const cand = legacyLinkedCandidate('s1', 'cand-legacy3', 4242, [
+      { osmType: 'way', osmId: 4242, distanceM: 3.1, tags: {} }
+    ]);
+    cand.linkedOsmType = 'node'; // explicitly set (e.g. by the new UI)
+    await surveyDb.updateCandidate(cand);
+
+    const loaded = (await surveyDb.loadSurvey('s1'))!.candidates.find((c) => c.id === 'cand-legacy3');
+    expect(loaded!.linkedOsmType).toBe('node');
+  });
+});
+
 describe('fresh v2 database', () => {
   it('creates metadata-only survey rows on a fresh install', async () => {
     await surveyDb.createSurvey({

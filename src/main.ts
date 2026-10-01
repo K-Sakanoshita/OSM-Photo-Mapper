@@ -7,6 +7,8 @@ import { capturePhoto } from './capture/photo';
 import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
+import { buildOsmChange } from './osm/osmchange';
+import { fetchLiveObject, type LiveOsmObject } from './osm/osm-api';
 import { commonValuesFor, getFeatureClass, suggestedTagsFor } from './analysis/feature-classes';
 import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
@@ -491,11 +493,13 @@ class App {
         if (snap) {
           solution.snappedPosition = snap.snappedPosition;
           solution.linkedOsmId = snap.osm.osmId;
+          solution.linkedOsmType = snap.osm.osmType;
           solution.snapConfidence = snap.confidence;
           solution.evidence.push(snap.evidence);
           c.lat = snap.snappedPosition.lat;
           c.lon = snap.snappedPosition.lon;
           c.linkedOsmId = snap.osm.osmId;
+          c.linkedOsmType = snap.osm.osmType;
           c.status = 'existing';
           c.warnings.push(
             `Snapped to ${snap.osm.osmType}/${snap.osm.osmId} (${Math.round(snap.confidence * 100)}% confidence) — verify the match.`
@@ -621,7 +625,7 @@ class App {
         steps.push(`refined +${d.toFixed(1)} m`);
       }
       if (ps.snappedPosition && ps.linkedOsmId != null) {
-        steps.push(`snapped → osm/${ps.linkedOsmId} (${Math.round((ps.snapConfidence ?? 0) * 100)}%)`);
+        steps.push(`snapped → osm/${ps.linkedOsmType ?? 'node'}/${ps.linkedOsmId} (${Math.round((ps.snapConfidence ?? 0) * 100)}%)`);
       }
       const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
       for (const e of ps.evidence) {
@@ -711,7 +715,7 @@ class App {
   }
 
   private buildOsmMatchRow(c: FeatureCandidate, m: OsmMatch): HTMLElement {
-    const linked = c.linkedOsmId === m.osmId;
+    const linked = c.linkedOsmId === m.osmId && (c.linkedOsmType == null || c.linkedOsmType === m.osmType);
     const tagPreview = Object.entries(m.tags)
       .slice(0, 2)
       .map(([k, v]) => `${k}=${v}`)
@@ -736,7 +740,10 @@ class App {
 
   private async onStatusChange(c: FeatureCandidate, sel: HTMLSelectElement): Promise<void> {
     c.status = sel.value as CandidateStatus;
-    if (c.status !== 'existing') c.linkedOsmId = undefined;
+    if (c.status !== 'existing') {
+      c.linkedOsmId = undefined;
+      c.linkedOsmType = undefined;
+    }
     await surveyDb.updateCandidate(c);
     if (this.mode === 'review') this.render();
   }
@@ -803,7 +810,9 @@ class App {
   private finalTags(c: FeatureCandidate): Record<string, string> {
     const tags: Record<string, string> = {};
     if (c.status === 'existing' && c.linkedOsmId != null) {
-      const match = c.osmMatches.find((m) => m.osmId === c.linkedOsmId);
+      const match = c.osmMatches.find(
+        (m) => m.osmId === c.linkedOsmId && (c.linkedOsmType == null || m.osmType === c.linkedOsmType)
+      );
       if (match) Object.assign(tags, match.tags);
     }
     Object.assign(tags, c.tags);
@@ -833,6 +842,7 @@ class App {
 
   private async onLinkExisting(c: FeatureCandidate, m: OsmMatch): Promise<void> {
     c.linkedOsmId = m.osmId;
+    c.linkedOsmType = m.osmType;
     c.status = 'existing';
     await surveyDb.updateCandidate(c);
     toast(`Linked to ${m.osmType}/${m.osmId}`);
@@ -847,7 +857,13 @@ class App {
     this.setMode('upload', 'Review upload');
 
     const add = s.candidates.filter((c) => c.status === 'new' && c.lat != null && c.lon != null);
-    const modify = s.candidates.filter((c) => c.status === 'existing' && c.linkedOsmId != null);
+    const linked = s.candidates.filter((c) => c.status === 'existing' && c.linkedOsmId != null);
+    // Issue #4: only node modifications can be exported (a way modify would
+    // require the full node list, which the MVP does not fetch). Linked
+    // ways/relations are kept as duplicate references but their modify is
+    // blocked and reported explicitly.
+    const modify = linked.filter((c) => (c.linkedOsmType ?? 'node') === 'node');
+    const blocked = linked.filter((c) => (c.linkedOsmType ?? 'node') !== 'node');
     const excluded = s.candidates.filter((c) => c.status === 'excluded');
     const orphan = s.candidates.filter((c) => c.status === 'new' && (c.lat == null || c.lon == null));
 
@@ -871,10 +887,25 @@ class App {
       el(
         'div',
         { class: 'upload-section' },
-        el('h2', {}, `Modify ${modify.length} existing`),
+        el('h2', {}, `Modify ${modify.length} node(s)`),
         ...modify.map((c) => this.buildEditRow(c, 'modify')),
         ...(modify.length === 0 ? [el('div', { class: 'row' }, '—')] : [])
       ),
+      ...(blocked.length === 0
+        ? []
+        : [
+            el(
+              'div',
+              { class: 'upload-section' },
+              el('h2', {}, `Blocked modify ${blocked.length} (way/relation)`),
+              el(
+                'div',
+                { class: 'row warn' },
+                'Way/relation modifications are not exported: a way modify requires the full node list and current structure, which the MVP does not fetch. These links are kept as duplicate references only.'
+              ),
+              ...blocked.map((c) => this.buildEditRow(c, 'modify'))
+            )
+          ]),
       el(
         'div',
         { class: 'upload-section' },
@@ -898,7 +929,7 @@ class App {
     const approveBtn = el('button', {
       class: 'btn primary',
       disabled: total === 0,
-      onclick: () => this.showXml(commentInput, xmlArea)
+      onclick: () => void this.showXml(commentInput, xmlArea)
     }, total === 0 ? 'Nothing to upload' : 'Approve & show XML');
 
     this.bottombar.replaceChildren(
@@ -915,25 +946,72 @@ class App {
       .join(' ');
     const idPart =
       kind === 'modify' && c.linkedOsmId != null
-        ? ` <code>${c.linkedOsmId}</code>`
+        ? ` <code>${c.linkedOsmType ?? 'node'}/${c.linkedOsmId}</code>`
         : c.lat != null && c.lon != null
           ? ` @ ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}`
           : '';
     return el('div', { class: 'edit-item' }, `${cls?.label ?? c.featureType}${idPart} — ${tagText}`);
   }
 
-  private showXml(commentInput: HTMLInputElement, xmlArea: HTMLElement): void {
+  private async showXml(commentInput: HTMLInputElement, xmlArea: HTMLElement): Promise<void> {
     const s = this.survey;
     if (!s) return;
-    const xml = buildOsmChange(s, commentInput.value.trim() || 'photo survey');
-    const copyBtn = el('button', { class: 'btn accent', onclick: () => void this.copyXml(xml) }, 'Copy XML');
-    const dlBtn = el('button', { class: 'btn', onclick: () => this.downloadXml(s, xml) }, 'Download .osmchange');
-    xmlArea.replaceChildren(
-      el('div', { class: 'xml-block' }, xml),
-      el('div', { class: 'changeset-row' }, copyBtn, dlBtn),
-      el('div', { class: 'row' }, 'Nothing is uploaded automatically. Paste the OSMChange into an OSM editor or apply it via an API client after a final check.')
+
+    // Issue #4: fetch each object's CURRENT state from the OSM API immediately
+    // before export. A failed fetch is an explicit conflict — the modification
+    // is excluded from the file and reported, never silently dropped.
+    const modifiable = s.candidates.filter(
+      (c) => c.status === 'existing' && c.linkedOsmId != null && (c.linkedOsmType ?? 'node') === 'node'
     );
-    toast('Changeset approved — review the XML before applying it');
+    const live = new Map<string, LiveOsmObject>();
+    const fetchErrors = new Map<string, string>();
+    const settled = await Promise.allSettled(
+      modifiable.map((c) => fetchLiveObject('node', c.linkedOsmId!))
+    );
+    settled.forEach((r, i) => {
+      const c = modifiable[i];
+      if (r.status === 'fulfilled') live.set(`node/${c.linkedOsmId}`, r.value);
+      else fetchErrors.set(c.id, (r.reason as Error).message);
+    });
+
+    const result = buildOsmChange(s, live);
+    const comment = commentInput.value.trim() || `${s.name} (photo survey)`;
+
+    const warn: HTMLElement[] = [];
+    for (const [id, reason] of fetchErrors) {
+      const c = s.candidates.find((x) => x.id === id);
+      const label = c ? (getFeatureClass(c.featureType)?.label ?? c.featureType) : id;
+      warn.push(
+        el('div', { class: 'row warn' }, `Conflict: ${label} → node/${c?.linkedOsmId ?? '?'} modify excluded — ${reason}`)
+      );
+    }
+    for (const b of result.blocked) {
+      warn.push(
+        el('div', { class: 'row warn' }, `Blocked: ${b.osmType}/${b.osmId} — way/relation modify is not supported yet (kept as a duplicate reference only)`)
+      );
+    }
+
+    if (!result.xml) {
+      xmlArea.replaceChildren(
+        el('div', { class: 'row warn' }, 'Nothing to export: every modification conflicted or is blocked.'),
+        ...warn
+      );
+      return;
+    }
+
+    const copyBtn = el('button', { class: 'btn accent', onclick: () => void this.copyXml(result.xml) }, 'Copy XML');
+    const dlBtn = el('button', { class: 'btn', onclick: () => this.downloadXml(s, result.xml) }, 'Download .osmchange');
+    xmlArea.replaceChildren(
+      el(
+        'div',
+        { class: 'row' },
+        `MVP contract: editor-import only (experimental). The file uses only the standard osmChange constructs (create/modify). Import it into an OSM editor (iD/Josm), review every change, and let the editor create the changeset. Suggested changeset comment: ${comment}`
+      ),
+      el('div', { class: 'xml-block' }, result.xml),
+      el('div', { class: 'changeset-row' }, copyBtn, dlBtn),
+      ...warn
+    );
+    toast('Approved — review the XML before importing it into an editor');
   }
 
   private async copyXml(xml: string): Promise<void> {
@@ -958,67 +1036,6 @@ class App {
     }, 1000);
     toast('Download started');
   }
-}
-
-/* ------------------------------------------------------------------ */
-/* OSMChange XML                                                       */
-/* ------------------------------------------------------------------ */
-
-const CREATED_BY = 'OSM Photo Mapper (MVP)';
-
-function tagXml(tags: Record<string, string>): string {
-  return Object.entries(tags)
-    .map(([k, v]) => `      <tag k="${esc(k)}" v="${esc(v)}"/>`)
-    .join('\n');
-}
-
-function buildOsmChange(survey: Survey, comment: string): string {
-  const add = survey.candidates.filter((c) => c.status === 'new' && c.lat != null && c.lon != null);
-  const modify = survey.candidates.filter((c) => c.status === 'existing' && c.linkedOsmId != null);
-
-  const addBlocks = add
-    .map((c, i) => {
-      const tags: Record<string, string> = { ...c.tags };
-      if (c.name && !('name' in tags)) tags.name = c.name;
-      return `    <node id="${-(i + 1)}" lat="${c.lat!.toFixed(7)}" lon="${c.lon!.toFixed(7)}">\n${tagXml(tags)}\n    </node>`;
-    })
-    .join('\n');
-
-  const modifyBlocks = modify
-    .map((c) => {
-      const match = c.osmMatches.find((m) => m.osmId === c.linkedOsmId);
-      const type = match?.osmType ?? 'node';
-      // <modify> replaces the whole tag set: keep the object's existing tags,
-      // overlay the reviewed candidate tags, so unrelated tags are not wiped.
-      const tags: Record<string, string> = { ...(match?.tags ?? {}) };
-      Object.assign(tags, c.tags);
-      if (c.name && !('name' in tags)) tags.name = c.name;
-      const coords =
-        type === 'node' && c.lat != null && c.lon != null
-          ? ` lat="${c.lat.toFixed(7)}" lon="${c.lon.toFixed(7)}"`
-          : '';
-      return `    <${type} id="${c.linkedOsmId}"${coords}>\n${tagXml(tags)}\n    </${type}>`;
-    })
-    .join('\n');
-
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<osmChange>',
-    '  <add>',
-    addBlocks || '  ',
-    '  </add>',
-    '  <modify>',
-    modifyBlocks || '  ',
-    '  </modify>',
-    '  <create>',
-    `    <creadetag k="created_by" v="${esc(CREATED_BY)}"/>`,
-    `    <creadetag k="comment" v="${esc(comment)}"/>`,
-    '  </create>',
-    '</osmChange>',
-    ''
-  ]
-    .join('\n')
-    .replace(/\n\s*\n\s*\n/g, '\n');
 }
 
 /* ------------------------------------------------------------------ */

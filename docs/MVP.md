@@ -91,9 +91,47 @@ The mapper can:
 
 ### 6. Review upload
 
-Before upload, show a complete summary of the proposed OSM changes.
+Before export, show a complete summary of the proposed OSM changes:
 
-The user must explicitly approve the changeset.
+- new nodes to create (with final tags and coordinates)
+- existing nodes to modify (linked by OSM type + ID)
+- modifications that are blocked (way/relation links — see below)
+- excluded candidates and candidates missing a position
+
+The user must explicitly approve the export.
+
+#### Output contract: editor-import only (experimental)
+
+The MVP does **not** upload to OpenStreetMap itself. On approval it emits a
+standard osmChange file (only the standard `create` / `modify` constructs —
+never custom or non-standard syntax) that the mapper imports into an OSM
+editor (iD, JOSM, ...) after a final visual check. The editor creates the
+changeset at import time; the app supplies a suggested changeset comment but
+changeset comments are not embedded in the osmChange file. Direct API upload
+(OAuth) is future work, not part of the MVP.
+
+#### Modification safety rules
+
+- A modification is only exported with the object's **current** state, fetched
+  from the public OSM API immediately before export. The exported `modify`
+  carries the current object version, and the merged tag set is built from the
+  current tags overlaid with the reviewed candidate tags (candidate wins on
+  conflicts). A stale snapshot from the analysis-time nearby lookup is never
+  used for export.
+- If the live object cannot be fetched (network error, 404, ...), the
+  modification is **excluded** and reported as an explicit conflict — never
+  silently dropped.
+- Only **node** modifications are exported. Modifying a way would require its
+  full node reference list and current structure, which the MVP does not
+  fetch; way/relation links are therefore blocked for export and reported on
+  the review screen. They may still serve as duplicate/existing references.
+
+#### Linked object identity
+
+A candidate linked to an existing OSM object stores both the object's type
+(`node` / `way` / `relation`) and its ID. Legacy rows that only stored the ID
+have their type resolved from the stored nearby-match list at load time
+(falling back to `node`).
 
 ## Initial feature classes
 
@@ -113,6 +151,8 @@ The exact tag presets should be based on current OSM tagging conventions rather 
 
 ## Out of scope for the MVP
 
+- direct OSM API uploads (OAuth); the MVP emits editor-import files only
+- way/relation modifications (node-only export; see §6)
 - autonomous OSM uploads
 - automatic mapping of complex polygons
 - route relations

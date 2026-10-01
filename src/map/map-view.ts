@@ -121,42 +121,92 @@ export class MapView {
     });
   }
 
+  /**
+   * Enable dragging of candidate pins (issue #4: must work with touch on
+   * mobile, not just mouse). While dragging, the pin's source feature is
+   * kept in sync, map panning is suspended so the map does not follow the
+   * finger, and `onPinDragged` fires with the final coordinates when the
+   * drag ends.
+   */
   private enableDragging(): void {
-    let draggingId: string | null = null;
+    /** Active drag state. Final coordinates come from here, not from an
+     *  (async) source read at drop time. */
+    let drag: { id: string; lat: number; lon: number } | null = null;
 
-    this.map.on('click', this.candidateLayerId, (e) => {
-      const feat = e.features?.[0];
-      if (!feat) return;
-      draggingId = (feat.properties?.id as string) ?? null;
-    });
+    const startDrag = (id: string, lat: number, lon: number): void => {
+      if (drag) return;
+      drag = { id, lat, lon };
+      this.map.dragPan.disable();
+      this.map.boxZoom.disable();
+    };
 
-    this.map.on('mousedown', this.candidateLayerId, (e) => {
-      const feat = e.features?.[0];
-      if (feat) draggingId = (feat.properties?.id as string) ?? null;
-    });
-
-    this.map.on('mousemove', async (e) => {
-      if (!draggingId) return;
-      const { lng, lat } = e.lngLat;
-      const src = this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined;
-      if (!src) return;
-      const data = (await src.getData()) as GeoJSON.FeatureCollection;
-      for (const f of data.features) {
-        if (f.properties?.id === draggingId) {
-          (f.geometry as GeoJSON.Point).coordinates = [lng, lat];
+    const moveDrag = (lng: number, lat: number): void => {
+      if (!drag) return;
+      drag.lon = lng;
+      drag.lat = lat;
+      void (async () => {
+        const src = this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined;
+        if (!src) return;
+        const data = (await src.getData()) as GeoJSON.FeatureCollection;
+        let found = false;
+        for (const f of data.features) {
+          if (f.properties?.id === drag?.id) {
+            (f.geometry as GeoJSON.Point).coordinates = [lng, lat];
+            found = true;
+          }
         }
+        if (found) src.setData(data);
+      })();
+    };
+
+    const endDrag = (): void => {
+      const d = drag;
+      drag = null;
+      this.map.dragPan.enable();
+      this.map.boxZoom.enable();
+      if (d) this.onPinDragged?.(d.id, d.lat, d.lon);
+    };
+
+    const featureAt = (features: maplibregl.MapGeoJSONFeature[] | undefined) => features?.[0];
+
+    // Mouse: layer-scoped mousedown starts the drag; map-level mousemove/
+    // mouseup track and end it. (MapLibre has no pointer events on layers.)
+    this.map.on('mousedown', this.candidateLayerId, (e: maplibregl.MapLayerMouseEvent) => {
+      const feat = featureAt(e.features);
+      const id = feat?.properties?.id as string | undefined;
+      if (id) {
+        const [lon, lat] = (feat!.geometry as GeoJSON.Point).coordinates;
+        startDrag(id, lat, lon);
       }
-      src.setData(data);
+    });
+    this.map.on('mousemove', (e: maplibregl.MapMouseEvent) => {
+      if (drag) moveDrag(e.lngLat.lng, e.lngLat.lat);
+    });
+    this.map.on('mouseup', () => {
+      if (drag) endDrag();
     });
 
-    this.map.on('mouseup', () => {
-      if (!draggingId) return;
-      const src = this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined;
-      const data = src?.getData() as GeoJSON.FeatureCollection | undefined;
-      const feat = data?.features.find((f) => f.properties?.id === draggingId);
-      const coords = (feat?.geometry as GeoJSON.Point | undefined)?.coordinates;
-      if (coords) this.onPinDragged?.(draggingId, coords[1], coords[0]);
-      draggingId = null;
+    // Touch: layer-scoped touchstart starts the drag (hit-testing the
+    // candidate layer), map-level touchmove/touchend track and end it.
+    this.map.on('touchstart', this.candidateLayerId, (e: maplibregl.MapLayerTouchEvent) => {
+      const feat = featureAt(e.features);
+      const id = feat?.properties?.id as string | undefined;
+      if (id) {
+        e.preventDefault(); // stop the map from treating this touch as a pan
+        const [lon, lat] = (feat!.geometry as GeoJSON.Point).coordinates;
+        startDrag(id, lat, lon);
+      }
+    });
+    this.map.on('touchmove', (e: maplibregl.MapTouchEvent) => {
+      if (!drag) return;
+      const ll = e.lngLats?.[0] ?? e.lngLat;
+      moveDrag(ll.lng, ll.lat);
+    });
+    this.map.on('touchend', () => {
+      if (drag) endDrag();
+    });
+    this.map.on('touchcancel', () => {
+      if (drag) endDrag();
     });
   }
 

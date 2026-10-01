@@ -11,7 +11,7 @@ The intended workflow is simple:
 5. Estimate each feature's position from GPS, camera direction, estimated distance, surrounding photos, and nearby OSM data.
 6. Review the generated pins on a map and in a list.
 7. Drag pins to correct positions and edit tags, including names when needed.
-8. Review the complete changeset and upload it to OpenStreetMap.
+8. Review the complete set of changes and approve the export. The app emits a standard osmChange file (editor-import only — see below) that the mapper imports into an OSM editor such as iD or JOSM.
 
 ## Design principles
 
@@ -58,7 +58,7 @@ Human review
   +-- exclude false positives
   |
   v
-OSM changeset upload
+osmChange export (import into an OSM editor)
 ```
 
 ## MVP scope
@@ -85,10 +85,18 @@ The MVP should not attempt to automatically map complex geometry, routes, bounda
 - Device orientation where available
 - IndexedDB for local survey storage
 - server-side image analysis
-- OpenStreetMap API with OAuth for reviewed uploads
+- Public OSM API to fetch current object state before export
+- OSM editor import (iD/JOSM) for applying reviewed changes; OAuth-based direct upload is future work
 
 The exact image-analysis API is intentionally kept behind an abstraction so that the implementation is not tightly coupled to one provider.
 
 ## Status
 
-Early design / prototype stage.
+Working MVP (experimental): survey recording, photo analysis, position estimation, map/list review with pin dragging (mouse and touch), and osmChange export.
+
+**Output contract: editor-import only.** The app never uploads to OpenStreetMap itself. On approval it exports a standard osmChange file using only the standard `create`/`modify` constructs:
+
+- modifications are built from the object's current state, fetched from the public OSM API immediately before export; fetch failures are reported as explicit conflicts and excluded;
+- only node modifications are exported (a way modify would require the full node list); way/relation links are kept as duplicate references and reported as blocked;
+- linked objects are identified by OSM type + ID;
+- the changeset is created by the editor at import time, with the suggested comment shown on the review screen.
