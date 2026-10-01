@@ -496,23 +496,22 @@ class App {
     }
     card.append(posRow);
 
-    if (Object.keys(c.tags).length > 0) {
-      card.append(
-        el(
-          'div',
-          { class: 'tags' },
-          ...Object.entries(c.tags).map(
-            ([k, v]) =>
-              el(
-                'span',
-                { class: 'tag-chip' },
-                esc(`${k}=${v}`),
-                el('button', { class: 'rm', 'aria-label': `Remove ${k}`, onclick: () => void this.onRemoveTag(c, k) }, '×')
-              )
-          )
-        )
-      );
-    }
+    card.append(
+      el(
+        'div',
+        { class: 'tags' },
+        ...Object.entries(c.tags).map(
+          ([k, v]) =>
+            el(
+              'span',
+              { class: 'tag-chip' },
+              el('code', { class: 'tag-val', title: 'Click to edit value', onclick: () => void this.onEditTag(c, k) }, `${esc(k)}=${esc(v)}`),
+              el('button', { class: 'rm', 'aria-label': `Remove ${k}`, onclick: () => void this.onRemoveTag(c, k) }, '×')
+            )
+        ),
+        this.buildAddTagRow(c)
+      )
+    );
 
     const nameInput = el('input', {
       class: 'name-input',
@@ -575,6 +574,53 @@ class App {
     delete c.tags[key];
     await surveyDb.updateCandidate(c);
     if (this.mode === 'review') this.render();
+  }
+
+  private async onEditTag(c: FeatureCandidate, key: string): Promise<void> {
+    const v = window.prompt(`Edit value for "${key}=" (leave empty to remove):`, c.tags[key] ?? '');
+    if (v == null) return;
+    const val = v.trim();
+    if (val) c.tags[key] = val;
+    else delete c.tags[key];
+    await surveyDb.updateCandidate(c);
+    if (this.mode === 'review') this.render();
+  }
+
+  private buildAddTagRow(c: FeatureCandidate): HTMLElement {
+    const kInput = el('input', { class: 'tag-key', placeholder: 'key', maxlength: 50 });
+    const vInput = el('input', { class: 'tag-value', placeholder: 'value' });
+    return el(
+      'div',
+      { class: 'add-tag-row' },
+      kInput,
+      vInput,
+      el('button', { class: 'btn small', onclick: () => void this.onAddTag(c, kInput, vInput) }, '+ tag')
+    );
+  }
+
+  private async onAddTag(c: FeatureCandidate, kInput: HTMLInputElement, vInput: HTMLInputElement): Promise<void> {
+    const k = kInput.value.trim();
+    const v = vInput.value.trim();
+    if (!k) {
+      toast('Tag key is required');
+      return;
+    }
+    c.tags[k] = v;
+    await surveyDb.updateCandidate(c);
+    if (this.mode === 'review') this.render();
+  }
+
+  /** Full tag set that will be written: existing object tags + candidate tags + name.
+   * OSMChange <modify> replaces the whole tag set, so existing tags must be carried over. */
+  private finalTags(c: FeatureCandidate): Record<string, string> {
+    const tags: Record<string, string> = {};
+    if (c.status === 'existing' && c.linkedOsmId != null) {
+      const match = c.osmMatches.find((m) => m.osmId === c.linkedOsmId);
+      if (match) Object.assign(tags, match.tags);
+    }
+    Object.assign(tags, c.tags);
+    if (c.name && !('name' in tags)) tags.name = c.name;
+    return tags;
   }
 
   private async onNameChanged(c: FeatureCandidate, input: HTMLInputElement): Promise<void> {
@@ -675,8 +721,7 @@ class App {
 
   private buildEditRow(c: FeatureCandidate, kind: 'add' | 'modify'): HTMLElement {
     const cls = getFeatureClass(c.featureType);
-    const tags = { ...c.tags };
-    if (c.name && !('name' in tags)) tags.name = c.name;
+    const tags = this.finalTags(c);
     const tagText = Object.entries(tags)
       .map(([k, v]) => `<code>${esc(`${k}=${v}`)}</code>`)
       .join(' ');
@@ -745,7 +790,7 @@ function buildOsmChange(survey: Survey, comment: string): string {
 
   const addBlocks = add
     .map((c, i) => {
-      const tags = { ...c.tags };
+      const tags: Record<string, string> = { ...c.tags };
       if (c.name && !('name' in tags)) tags.name = c.name;
       return `    <node id="${-(i + 1)}" lat="${c.lat!.toFixed(7)}" lon="${c.lon!.toFixed(7)}">\n${tagXml(tags)}\n    </node>`;
     })
@@ -755,7 +800,10 @@ function buildOsmChange(survey: Survey, comment: string): string {
     .map((c) => {
       const match = c.osmMatches.find((m) => m.osmId === c.linkedOsmId);
       const type = match?.osmType ?? 'node';
-      const tags = { ...c.tags };
+      // <modify> replaces the whole tag set: keep the object's existing tags,
+      // overlay the reviewed candidate tags, so unrelated tags are not wiped.
+      const tags: Record<string, string> = { ...(match?.tags ?? {}) };
+      Object.assign(tags, c.tags);
       if (c.name && !('name' in tags)) tags.name = c.name;
       const coords =
         type === 'node' && c.lat != null && c.lon != null
