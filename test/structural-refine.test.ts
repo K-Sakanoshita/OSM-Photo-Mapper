@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { PixelGrid } from '../src/imagery/region';
-import { refineByStructure } from '../src/analysis/structural-refine';
+import { MAX_EVIDENCE_M_PER_PX, refineByStructure } from '../src/analysis/structural-refine';
 
 const NORTH = 48.815;
 const WEST = 2.33;
-const MPP = 0.7; // meters per pixel
+const MPP = 0.5; // meters per pixel (<= MAX_EVIDENCE_M_PER_PX)
 const SIZE = 64;
 
 /** Build a synthetic grid: `fill(x, y)` -> luminance. Bounds derived from mPerPixel. */
-function makeGrid(fill: (x: number, y: number) => number): PixelGrid {
+function makeGrid(fill: (x: number, y: number) => number, mpp: number = MPP): PixelGrid {
   const luma = new Float32Array(SIZE * SIZE);
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) luma[y * SIZE + x] = fill(x, y);
   }
-  const dLat = (SIZE * MPP) / 111320;
-  const dLon = (SIZE * MPP) / (111320 * Math.cos((NORTH * Math.PI) / 180));
+  const dLat = (SIZE * mpp) / 111320;
+  const dLon = (SIZE * mpp) / (111320 * Math.cos((NORTH * Math.PI) / 180));
   return new PixelGrid({
     width: SIZE,
     height: SIZE,
@@ -22,7 +22,7 @@ function makeGrid(fill: (x: number, y: number) => number): PixelGrid {
     southLat: NORTH - dLat,
     westLon: WEST,
     eastLon: WEST + dLon,
-    mPerPixel: MPP,
+    mPerPixel: mpp,
     luma
   });
 }
@@ -60,11 +60,12 @@ describe('refineByStructure', () => {
   });
 
   it('never exceeds the correction bound', () => {
-    // Boundary is 10 px (~7 m) away; a 3 m bound cannot reach it.
+    // Boundary is 10 px (~5 m at 0.5 m/px) away; a 2 m bound cannot reach
+    // it (the 4-px scoring window of a 2 m sample stays off the edge).
     const start = EDGE_GRID.pixelCenter(22, 32)!;
-    const res = refineByStructure(EDGE_GRID, start.lat, start.lon, 'vending_machine', 3);
+    const res = refineByStructure(EDGE_GRID, start.lat, start.lon, 'vending_machine', 2);
     // Either no move, or a move strictly within the bound.
-    if (res) expect(res.deltaM).toBeLessThanOrEqual(3 + 1e-6);
+    if (res) expect(res.deltaM).toBeLessThanOrEqual(2 + 1e-6);
     // With such a tight bound the samples never reach the edge -> no move.
     expect(res).toBeNull();
   });
@@ -85,6 +86,25 @@ describe('refineByStructure', () => {
   it('returns null when the bound is below 1 m', () => {
     const start = EDGE_GRID.pixelCenter(22, 32)!;
     expect(refineByStructure(EDGE_GRID, start.lat, start.lon, 'vending_machine', 0.5)).toBeNull();
+  });
+
+  it('does not use coarse imagery as evidence for small POIs', () => {
+    // Same boundary scene, but at 1.5 m/px (typical z17 for Japan): coarser
+    // than MAX_EVIDENCE_M_PER_PX, so refinement is refused outright.
+    expect(MAX_EVIDENCE_M_PER_PX).toBe(0.9);
+    const coarse = makeGrid((x) => (x < 32 ? 200 : 60), 1.5);
+    const start = coarse.pixelCenter(22, 32)!;
+    expect(refineByStructure(coarse, start.lat, start.lon, 'vending_machine', 10)).toBeNull();
+  });
+
+  it('accepts imagery just below the resolution gate (z18-class)', () => {
+    // 0.86 m/px is z18 at ~46°N — still usable evidence.
+    const z18ish = makeGrid((x) => (x < 32 ? 200 : 60), 0.86);
+    // Start ~3 m from the boundary so the 5 m sample straddles the
+    // transition (window radius is 2 px at 0.86 m/px).
+    const start = z18ish.pixelCenter(26, 32)!;
+    const res = refineByStructure(z18ish, start.lat, start.lon, 'vending_machine', 10);
+    expect(res).not.toBeNull();
   });
 });
 

@@ -13,7 +13,7 @@ import { commonValuesFor, getFeatureClass, suggestedTagsFor } from './analysis/f
 import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
 import { distanceMeters } from './analysis/position';
-import { gsiProvider } from './imagery/providers';
+import { selectProvider } from './imagery/providers';
 import type {
   CandidateStatus,
   FeatureCandidate,
@@ -473,9 +473,17 @@ class App {
           ]
         };
 
-        const refined = await refinePosition(gsiProvider, c.featureType, est.lat, est.lon, uncertainty);
+        // Imagery provider: high-res first, GSI as the nationwide
+        // fallback (issue #8). Correction is bounded by the uncertainty
+        // and degrades to the raw estimate on any gap/error.
+        const provider = selectProvider(est.lat, est.lon);
+        const refined = await refinePosition(provider, c.featureType, est.lat, est.lon, uncertainty);
         if (refined) {
           solution.refinedPosition = { lat: refined.lat, lon: refined.lon };
+          // A reviewable proposal: applied by default but explicit and
+          // reversible in review (issue #8). Provenance carried along.
+          solution.refinementApplied = true;
+          solution.imagerySource = refined.attribution;
           solution.evidence.push(refined.evidence);
         }
 
@@ -485,7 +493,8 @@ class App {
           lon: base.lon,
           featureType: c.featureType,
           uncertaintyM: uncertainty,
-          matches: c.osmMatches
+          matches: c.osmMatches,
+          candidateTags: c.tags
         });
 
         c.positionSolution = solution;
@@ -507,7 +516,9 @@ class App {
         } else if (refined) {
           c.lat = base.lat;
           c.lon = base.lon;
-          c.warnings.push(`Position refined ${refined.deltaM.toFixed(1)} m by aerial structure — verify against the photos.`);
+          c.warnings.push(
+            `Position refined ${refined.deltaM.toFixed(1)} m by aerial structure (${refined.sourceId ?? 'imagery'}) — verify against the photos; reversible in review.`
+          );
         }
       }
 
@@ -630,6 +641,38 @@ class App {
       const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
       for (const e of ps.evidence) {
         solRow.append(el('span', { class: 'ev-chip', title: e.detail ?? e.label }, e.label));
+      }
+      // Issue #8: the aerial refinement is a reviewable, reversible
+      // proposal — show which position is working, the imagery
+      // provenance, and an explicit revert/apply control.
+      const snapped = ps.snappedPosition != null && ps.linkedOsmId != null;
+      // Attribution is shown whenever imagery contributed — including as
+      // the base position a snap was evaluated from.
+      if (ps.refinedPosition && ps.imagerySource) {
+        solRow.append(
+          el('span', { class: 'imagery-attr', title: 'Imagery source used for position refinement' }, ` · Imagery: ${ps.imagerySource}`)
+        );
+      }
+      if (ps.refinedPosition && !snapped) {
+        if (ps.refinementApplied !== false) {
+          solRow.append(
+            el('span', { class: 'working-tag' }, ' · working: refined'),
+            el('button', {
+              class: 'btn small revert-btn',
+              title: 'Discard the aerial correction and keep the ground-survey estimate',
+              onclick: () => void this.onRevertRefinement(c)
+            }, '↩ Revert to ground estimate')
+          );
+        } else {
+          solRow.append(
+            el('span', { class: 'working-tag' }, ' · working: ground estimate'),
+            el('button', {
+              class: 'btn small apply-btn',
+              title: 'Use the aerial-refined position as the working position',
+              onclick: () => void this.onApplyRefinement(c)
+            }, 'Apply aerial correction')
+          );
+        }
       }
       card.append(solRow);
     }
@@ -838,6 +881,36 @@ class App {
     await surveyDb.updateCandidate(c);
     this.mapView.setCandidates(s.candidates);
     toast('Pin moved');
+  }
+
+  /** Issue #8: discard the aerial refinement — the ground-survey
+   *  estimate becomes the working position again (the refinement stays
+   *  in the provenance chain as unapplied). */
+  private async onRevertRefinement(c: FeatureCandidate): Promise<void> {
+    const s = this.survey;
+    const ps = c.positionSolution;
+    if (!s || !ps?.refinedPosition || ps.snappedPosition != null || ps.refinementApplied === false) return;
+    c.lat = ps.estimatedPosition.lat;
+    c.lon = ps.estimatedPosition.lon;
+    ps.refinementApplied = false;
+    await surveyDb.updateCandidate(c);
+    this.mapView.setCandidates(s.candidates);
+    if (this.mode === 'review') this.render();
+    toast('Reverted to ground-survey estimate');
+  }
+
+  /** Issue #8: (re-)apply the aerial refinement as the working position. */
+  private async onApplyRefinement(c: FeatureCandidate): Promise<void> {
+    const s = this.survey;
+    const ps = c.positionSolution;
+    if (!s || !ps?.refinedPosition || ps.snappedPosition != null || ps.refinementApplied !== false) return;
+    c.lat = ps.refinedPosition.lat;
+    c.lon = ps.refinedPosition.lon;
+    ps.refinementApplied = true;
+    await surveyDb.updateCandidate(c);
+    this.mapView.setCandidates(s.candidates);
+    if (this.mode === 'review') this.render();
+    toast('Aerial-refined position applied');
   }
 
   private async onLinkExisting(c: FeatureCandidate, m: OsmMatch): Promise<void> {

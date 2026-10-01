@@ -112,8 +112,17 @@ export interface PositionEvidence {
  */
 export interface PositionSolution {
   estimatedPosition: { lat: number; lon: number };
-  /** Bounded imagery-based correction (a few meters at most). */
+  /** Bounded imagery-based correction (a few meters at most). A
+   *  reviewable PROPOSAL — applied by default but explicit and reversible
+   *  (issue #8): the ground-survey estimate is never discarded. */
   refinedPosition?: { lat: number; lon: number };
+  /** Whether the refined position is the current working position
+   *  (true after analysis applies it; false after the reviewer reverts
+   *  to the ground estimate). */
+  refinementApplied?: boolean;
+  /** Imagery source attribution, shown in review whenever aerial imagery
+   *  contributed (issue #8). */
+  imagerySource?: string;
   /** OSM object position; set only when the snap is strong and unique. */
   snappedPosition?: { lat: number; lon: number };
   linkedOsmId?: number;

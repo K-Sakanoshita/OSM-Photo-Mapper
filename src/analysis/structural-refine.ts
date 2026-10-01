@@ -21,6 +21,7 @@
 import type { PositionEvidence } from '../types';
 import type { TileProvider } from '../imagery/providers';
 import { PixelGrid, stitchRegion } from '../imagery/region';
+import { mPerPixelAt, zoomForResolution } from '../imagery/tiles';
 
 /** Feature classes that are normally attached to building structure. */
 export const STRUCTURE_BOUND_TYPES = new Set([
@@ -36,11 +37,29 @@ export interface RefineResult {
   /** Correction distance, meters (always <= the bound). */
   deltaM: number;
   evidence: PositionEvidence;
+  /** Imagery source that provided the evidence (set by refinePosition). */
+  sourceId?: string;
+  /** Attribution to display in review when imagery contributed. */
+  attribution?: string;
 }
+
+/** Coarsest effective ground resolution acceptable as evidence for small
+ *  POIs, in meters per pixel (issue #8).
+ *
+ *  Calibrated for Japanese latitudes (34–46°N): z18 ortho is 0.72–0.86
+ *  m/px there, while z17 is 1.44–1.72 m/px. The 0.9 threshold accepts
+ *  z18-class imagery everywhere in Japan and rejects z17 and coarser,
+ *  which cannot reliably resolve small POIs (benches, signs, equipment). */
+export const MAX_EVIDENCE_M_PER_PX = 0.9;
 
 const EDGE_NORM = 64; // mean |grad| at which the edge score saturates
 const MIN_IMPROVEMENT = 0.03;
-const REL_IMPROVEMENT = 1.15;
+/** A sample must beat the center by this factor (plus MIN_IMPROVEMENT).
+ *  Kept modest: at z18-class resolution the scoring window is wide, so a
+ *  center point near a boundary already scores fairly well and a large
+ *  relative demand would make refinement dead. The absolute 0.03 floor
+ *  still guards against noise-driven moves. */
+const REL_IMPROVEMENT = 1.05;
 const MAX_REFINE_M = 10; // hard cap: refinement is "a few meters"
 
 interface SampleScore {
@@ -79,6 +98,10 @@ export function refineByStructure(
   if (maxCorrectionM < 1) return null;
   const bound = Math.min(maxCorrectionM, MAX_REFINE_M);
   const structureBound = STRUCTURE_BOUND_TYPES.has(featureType);
+
+  // Evidence-quality gate: coarse imagery is not evidence for small POIs
+  // (issue #8). Also catches zoom fallbacks from the stitcher's budgets.
+  if (grid.mPerPixel > MAX_EVIDENCE_M_PER_PX) return null;
 
   const center = grid.pixelOf(latDeg, lonDeg);
   if (!center) return null;
@@ -147,8 +170,22 @@ export async function refinePosition(
   targetMetersPerPixel: number = 0.5
 ): Promise<RefineResult | null> {
   if (!provider) return null;
+
+  // Cheap pre-check: if even the best zoom this provider offers is too
+  // coarse for small-POI evidence, skip the tile fetches entirely.
+  const bestZoom = Math.min(zoomForResolution(targetMetersPerPixel, latDeg), provider.source.maxZoom);
+  if (mPerPixelAt(bestZoom, latDeg) > MAX_EVIDENCE_M_PER_PX) return null;
+
   const regionRadius = Math.min(Math.max(uncertaintyM, 5), 20);
   const grid = await stitchRegion(provider, latDeg, lonDeg, regionRadius, targetMetersPerPixel);
   if (!grid) return null;
-  return refineByStructure(grid, latDeg, lonDeg, featureType, Math.min(uncertaintyM, MAX_REFINE_M));
+  const res = refineByStructure(grid, latDeg, lonDeg, featureType, Math.min(uncertaintyM, MAX_REFINE_M));
+  if (!res) return null;
+  // Carry imagery provenance so review can show the source/attribution
+  // whenever aerial data contributed to the position.
+  return {
+    ...res,
+    sourceId: provider.source.id,
+    attribution: provider.source.attribution
+  };
 }

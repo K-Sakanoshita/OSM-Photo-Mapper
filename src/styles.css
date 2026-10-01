@@ -291,6 +291,23 @@ body[data-mode='upload'] #content { display: block; }
   margin-left: 4px;
   white-space: nowrap;
 }
+.working-tag {
+  display: inline-block;
+  background: #fff7e0;
+  color: #8a6d1a;
+  border: 1px solid #e5d18a;
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+.imagery-attr {
+  font-size: 11px;
+  color: #666;
+  margin-left: 4px;
+  white-space: nowrap;
+}
 .add-tag-row {
   display: flex;
   align-items: center;
