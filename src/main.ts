@@ -9,7 +9,16 @@ import { MockAnalyzer } from './analysis/mock-analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
 import { buildOsmChange } from './osm/osmchange';
 import { fetchLiveObject, type LiveOsmObject } from './osm/osm-api';
-import { commonValuesFor, getFeatureClass, suggestedTagsFor } from './analysis/feature-classes';
+import {
+  applyMappingToTags,
+  commonValuesFor,
+  findChosenMapping,
+  getFeatureClass,
+  geometryPreferenceFor,
+  mappingsFor,
+  suggestedTagsFor,
+  type OsmMapping
+} from './analysis/feature-classes';
 import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
 import { distanceMeters } from './analysis/position';
@@ -612,6 +621,20 @@ class App {
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? c.featureType), statusSel)
     );
 
+    // Issue #9: review-only class — the OSM mapping is uncertain/ambiguous,
+    // so nothing is applied automatically; the reviewer decides.
+    if (cls && !cls.autoTag) {
+      card.append(
+        el(
+          'div',
+          { class: 'review-only-note' },
+          cls.mappings && cls.mappings.length > 0
+            ? 'Review-only class — choose the OSM mapping below (or edit the tags manually). Nothing is applied automatically.'
+            : 'Review-only class — no established OSM mapping. Set the tags manually below.'
+        )
+      );
+    }
+
     const posRow = el('div', { class: 'row' });
     if (c.lat != null && c.lon != null) {
       posRow.append(
@@ -646,6 +669,11 @@ class App {
       // proposal — show which position is working, the imagery
       // provenance, and an explicit revert/apply control.
       const snapped = ps.snappedPosition != null && ps.linkedOsmId != null;
+      // Issue #9: review-only classes are never auto-snapped — unconfirmed
+      // OSM semantics must not drive object identity.
+      if (!snapped && cls && !cls.autoTag) {
+        solRow.append(el('span', { class: 'review-only-note' }, ' · no auto-snap (review-only class)'));
+      }
       // Attribution is shown whenever imagery contributed — including as
       // the base position a snap was evaluated from.
       if (ps.refinedPosition && ps.imagerySource) {
@@ -693,6 +721,36 @@ class App {
         this.buildAddTagRow(c)
       )
     );
+
+    // Issue #9: OSM mapping picker for review-only classes (ambiguous or
+    // unconfirmed semantics). Choosing a mapping applies its tags; the
+    // reviewer can still edit them afterwards.
+    if (cls && !cls.autoTag && cls.mappings && cls.mappings.length > 0) {
+      const chosen = findChosenMapping(c.featureType, c.tags);
+      const picker = el('div', { class: 'mapping-picker' }, el('b', {}, 'OSM mapping:'));
+      for (const m of cls.mappings) {
+        const radio = el('input', { type: 'radio', name: `mapping-${c.id}` });
+        radio.checked = chosen === m;
+        radio.onchange = () => {
+          if (radio.checked) void this.onMappingChosen(c, m);
+        };
+        picker.append(el('label', { class: 'mapping-opt' }, radio, ` ${m.label}${m.hint ? ` — ${m.hint}` : ''}`));
+      }
+      card.append(picker);
+    }
+
+    // Issue #9: geometry policy — area-based classes are never created from
+    // a single photo; show the reviewer the alternatives.
+    const geomPref = geometryPreferenceFor(c.featureType);
+    if (c.status === 'new' && (geomPref === 'area' || geomPref === 'existing-only')) {
+      card.append(
+        el(
+          'div',
+          { class: 'geometry-note' },
+          'Area-based class: the app will not create geometry from a single photo. Link to an existing object (status: Existing) or draw the boundary in an editor.'
+        )
+      );
+    }
 
     // Optional subtype suggestions (issue #5): never applied by default;
     // surfaced here for the reviewer to confirm from the photo.
@@ -883,6 +941,14 @@ class App {
     toast('Pin moved');
   }
 
+  /** Issue #9: apply the OSM mapping chosen for a review-only candidate. */
+  private async onMappingChosen(c: FeatureCandidate, m: OsmMapping): Promise<void> {
+    const all = mappingsFor(c.featureType);
+    c.tags = applyMappingToTags(c.tags, m, all.length > 0 ? all : [m]);
+    await surveyDb.updateCandidate(c);
+    if (this.mode === 'review') this.render();
+  }
+
   /** Issue #8: discard the aerial refinement — the ground-survey
    *  estimate becomes the working position again (the refinement stays
    *  in the provenance chain as unapplied). */
@@ -929,7 +995,19 @@ class App {
     if (!s) return;
     this.setMode('upload', 'Review upload');
 
-    const add = s.candidates.filter((c) => c.status === 'new' && c.lat != null && c.lon != null);
+    // Issue #9 geometry policy: area-based classes are never created from a
+    // point position — the app must not fabricate polygon/way geometry from
+    // a single photo.
+    const isAreaClass = (c: FeatureCandidate): boolean => {
+      const p = geometryPreferenceFor(c.featureType);
+      return p === 'area' || p === 'existing-only';
+    };
+    const add = s.candidates.filter(
+      (c) => c.status === 'new' && c.lat != null && c.lon != null && !isAreaClass(c)
+    );
+    const areaBlocked = s.candidates.filter(
+      (c) => c.status === 'new' && c.lat != null && c.lon != null && isAreaClass(c)
+    );
     const linked = s.candidates.filter((c) => c.status === 'existing' && c.linkedOsmId != null);
     // Issue #4: only node modifications can be exported (a way modify would
     // require the full node list, which the MVP does not fetch). Linked
@@ -957,6 +1035,21 @@ class App {
         ...add.map((c) => this.buildEditRow(c, 'add')),
         ...(add.length === 0 ? [el('div', { class: 'row' }, '—')] : [])
       ),
+      ...(areaBlocked.length === 0
+        ? []
+        : [
+            el(
+              'div',
+              { class: 'upload-section' },
+              el('h2', {}, `Area-based (not created) ${areaBlocked.length}`),
+              el(
+                'div',
+                { class: 'row warn' },
+                'Area-based feature classes are never created from a single photo — the app does not fabricate polygon/way geometry. Link these candidates to an existing object or draw the boundary in an editor.'
+              ),
+              ...areaBlocked.map((c) => this.buildEditRow(c, 'add'))
+            )
+          ]),
       el(
         'div',
         { class: 'upload-section' },
@@ -1061,6 +1154,13 @@ class App {
     for (const b of result.blocked) {
       warn.push(
         el('div', { class: 'row warn' }, `Blocked: ${b.osmType}/${b.osmId} — way/relation modify is not supported yet (kept as a duplicate reference only)`)
+      );
+    }
+    for (const gb of result.geometryBlocked) {
+      const c = s.candidates.find((x) => x.id === gb.candidateId);
+      const label = c ? (getFeatureClass(c.featureType)?.label ?? c.featureType) : gb.candidateId;
+      warn.push(
+        el('div', { class: 'row warn' }, `Geometry policy: ${label} (${gb.featureType}) not created — ${gb.reason}`)
       );
     }
 

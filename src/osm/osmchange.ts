@@ -1,5 +1,6 @@
 import type { FeatureCandidate, OsmType, Survey } from '../types';
 import type { LiveOsmObject } from './osm-api';
+import { geometryPreferenceFor } from '../analysis/feature-classes';
 
 /**
  * OSMChange exporter (issue #4).
@@ -27,6 +28,14 @@ import type { LiveOsmObject } from './osm-api';
  *    ways/relations may still serve as duplicate/existing references.
  *  - A modify whose live object could not be fetched is reported as an
  *    explicit conflict and excluded from the file.
+ *  - Geometry policy (issue #9): a candidate whose feature class is
+ *    area-based ('area' or 'existing-only') is NEVER emitted as a create
+ *    from a point position — the app must not fabricate polygon/way
+ *    geometry from a single photo. Such candidates are reported in
+ *    `geometryBlocked`; the reviewer links them to an existing object or
+ *    draws the boundary in an editor. ('node' and 'either' classes are
+ *    created as nodes: a point representation is legitimate for small
+ *    facilities.)
  */
 
 export interface OsmChangeConflict {
@@ -51,7 +60,14 @@ export interface OsmChangeResult {
   conflicts: OsmChangeConflict[];
   /** Modifications excluded because way/relation modify is not supported. */
   blocked: OsmChangeBlocked[];
+  /** New candidates excluded by the geometry policy (area-based classes
+   *  are never created as fabricated polygons from a single photo). */
+  geometryBlocked: { candidateId: string; featureType: string; reason: string }[];
 }
+
+const AREA_BLOCK_REASON =
+  'area-based feature class — the app does not fabricate polygon/way geometry from a single photo; ' +
+  'link this candidate to an existing object or draw the boundary in an editor';
 
 function esc(s: string): string {
   return s
@@ -77,13 +93,23 @@ export function buildOsmChange(
   /** Live object state keyed by `${type}/${id}`, fetched right before export. */
   live: Map<string, LiveOsmObject>
 ): OsmChangeResult {
-  const creates: FeatureCandidate[] = survey.candidates.filter(
-    (c) => c.status === 'new' && c.lat != null && c.lon != null
-  );
-
   const conflicts: OsmChangeConflict[] = [];
   const blocked: OsmChangeBlocked[] = [];
+  const geometryBlocked: OsmChangeResult['geometryBlocked'] = [];
   const modifyBlocks: string[] = [];
+
+  // Geometry policy (issue #9): area-based classes are never created from
+  // a point position.
+  const creates: FeatureCandidate[] = survey.candidates
+    .filter((c) => c.status === 'new' && c.lat != null && c.lon != null)
+    .filter((c) => {
+      const pref = geometryPreferenceFor(c.featureType);
+      if (pref === 'area' || pref === 'existing-only') {
+        geometryBlocked.push({ candidateId: c.id, featureType: c.featureType, reason: AREA_BLOCK_REASON });
+        return false;
+      }
+      return true;
+    });
 
   for (const c of survey.candidates) {
     if (c.status !== 'existing' || c.linkedOsmId == null) continue;
@@ -141,6 +167,7 @@ export function buildOsmChange(
     creates: createBlocks.length,
     modifies: modifyBlocks.length,
     conflicts,
-    blocked
+    blocked,
+    geometryBlocked
   };
 }

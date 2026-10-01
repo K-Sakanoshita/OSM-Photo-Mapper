@@ -16,9 +16,15 @@ describe('buildTagClauses (issue #5)', () => {
   const clauses = buildTagClauses();
 
   it('emits an exact-match clause for single-value keys', () => {
-    // Keys used by only one value get "="; amenity is shared by many classes.
-    expect(clauses).toContain('["emergency"="defibrillator"]');
-    expect(clauses).toContain('["tourism"="information"]');
+    // Keys used by only one value get "="; amenity/emergency are shared by
+    // many classes (alternation instead).
+    expect(clauses).toContain('["highway"="street_lamp"]');
+    expect(clauses).toContain('["barrier"="bollard"]');
+    expect(clauses).toContain('["information"="board"]');
+    const emergency = clauses.find((c) => c.startsWith('["emergency"~'));
+    expect(emergency).toMatch(/\^\(([^)]*)\)\$"\]$/);
+    expect(emergency).toContain('defibrillator');
+    expect(emergency).toContain('fire_hydrant');
   });
 
   it('emits an anchored alternation regex for multi-value keys', () => {
@@ -37,7 +43,28 @@ describe('buildTagClauses (issue #5)', () => {
 
   it('emits one clause per distinct tag key', () => {
     const keys = new Set(clauses.map((c) => c.match(/^["\[]("?)([a-z_]+)\1[="~]/)?.[2]));
-    expect(keys).toEqual(new Set(['amenity', 'emergency', 'tourism', 'playground']));
+    expect(keys).toEqual(
+      new Set([
+        'amenity', 'emergency', 'information', 'highway', 'man_made', 'barrier',
+        'historic', 'tourism', 'artwork_type', 'memorial', 'leisure', 'playground'
+      ])
+    );
+  });
+
+  it('includes review-only candidate mapping values in the search (issue #9)', () => {
+    // Existing objects using ANY plausible convention should be found for
+    // duplicate detection — even when the convention is unsettled.
+    const manMade = clauses.find((c) => c.startsWith('["man_made"~'));
+    expect(manMade).toContain('manhole');
+    expect(manMade).toContain('stone_lantern');
+    const historic = clauses.find((c) => c.startsWith('["historic"~'));
+    expect(historic).toContain('torii');
+    expect(historic).toContain('stone_lantern');
+    expect(historic).toContain('memorial');
+    expect(clauses).toContain('["tourism"="artwork"]');
+    expect(clauses).toContain('["artwork_type"="statue"]');
+    expect(clauses).toContain('["memorial"="statue"]');
+    expect(clauses).toContain('["leisure"="playground"]');
   });
 });
 
@@ -152,6 +179,19 @@ describe('scoreTagsForClass (issue #5: score against ONE class)', () => {
     expect(scoreTagsForClass({ playground: 'swing' }, 'playground')).toBe(1);
     expect(scoreTagsForClass({ leisure: 'playground' }, 'playground')).toBe(0);
     expect(scoreTagsForClass({ amenity: 'bench' }, 'playground')).toBe(0);
+  });
+
+  it('scores review-only classes by presence of mapping keys (issue #9)', () => {
+    // stone_lantern: defining keys are historic + man_made; a match under
+    // either convention scores 0.5 (partial presence, never a false 1.0).
+    expect(scoreTagsForClass({ historic: 'stone_lantern' }, 'stone_lantern')).toBeCloseTo(0.5);
+    expect(scoreTagsForClass({ man_made: 'stone_lantern' }, 'stone_lantern')).toBeCloseTo(0.5);
+    // statue: defining keys are tourism, artwork_type, historic, memorial;
+    // the artwork convention scores 2/4.
+    expect(scoreTagsForClass({ tourism: 'artwork', artwork_type: 'statue' }, 'statue')).toBeCloseTo(0.5);
+    // komainu has no defining keys at all -> 0 (no OSM duplicate lookup
+    // is possible; documented limitation).
+    expect(scoreTagsForClass({ historic: 'sculpture' }, 'komainu')).toBe(0);
   });
 
   it('scores 0 for unknown feature types', () => {

@@ -5,6 +5,7 @@ import {
   identifyingTagConflicts,
   type SnapInput
 } from '../src/analysis/snap-decision';
+import { scoreTagsForClass } from '../src/osm/overpass';
 import type { OsmMatch } from '../src/types';
 
 const LAT = 48.81;
@@ -117,23 +118,25 @@ describe('identifying tags (same class ≠ same object)', () => {
     expect(res).toBeNull();
   });
 
-  it('does not snap when a class-inferred detail value is contradicted (board vs guidepost)', () => {
-    // Candidate is an information board (class infers information=board);
-    // the OSM object is tourism=information + information=guidepost.
+  it('does not snap when the object contradicts a class-required detail (board vs guidepost)', () => {
+    // Candidate is an information board (class requires amenity=information
+    // + information=board); the OSM object is an information point of a
+    // different subtype (information=guidepost). The required-tag mismatch
+    // keeps the class score below the exact-match threshold, so no snap.
     const res = decideSnap(
       input({
         featureType: 'information_board',
         uncertaintyM: 5,
-        candidateTags: { tourism: 'information' },
-        matches: [match(302, 2, 0, { tourism: 'information', information: 'guidepost' })]
+        candidateTags: { amenity: 'information' },
+        matches: [match(302, 2, 0, { amenity: 'information', information: 'guidepost' })]
       })
     );
     expect(res).toBeNull();
-    const conflicts = identifyingTagConflicts({ tourism: 'information' }, 'information_board', {
-      tourism: 'information',
-      information: 'guidepost'
-    });
-    expect(conflicts.some((c) => c.includes('guidepost'))).toBe(true);
+    // The object is class-compatible but not an EXACT match (0.5 of the
+    // required tags agree), which is insufficient for auto-snap.
+    expect(
+      scoreTagsForClass({ amenity: 'information', information: 'guidepost' }, 'information_board')
+    ).toBeCloseTo(0.5);
   });
 
   it('snaps when the object agrees on the candidate identifying tags', () => {
@@ -141,8 +144,8 @@ describe('identifying tags (same class ≠ same object)', () => {
       input({
         featureType: 'information_board',
         uncertaintyM: 5,
-        candidateTags: { tourism: 'information', information: 'board' },
-        matches: [match(303, 2, 0, { tourism: 'information', information: 'board', name: 'Info' })]
+        candidateTags: { amenity: 'information', information: 'board' },
+        matches: [match(303, 2, 0, { amenity: 'information', information: 'board', name: 'Info' })]
       })
     );
     expect(res).not.toBeNull();
@@ -167,21 +170,62 @@ describe('identifying tags (same class ≠ same object)', () => {
 
   it('does not treat a subtype-contradicting object as a competing same-object candidate', () => {
     // Primary: the board (information=board) at 2 m. Competitor: a
-    // guidepost (information=guidepost) at 4 m. The guidepost is a
-    // DIFFERENT object for this candidate, so it must not create
-    // ambiguity and block the snap.
+    // guidepost (information=guidepost) at 4 m. The guidepost contradicts
+    // the candidate's confirmed information=board value, so it is a
+    // DIFFERENT object and must not create ambiguity and block the snap.
     const res = decideSnap(
       input({
         featureType: 'information_board',
         uncertaintyM: 5,
-        candidateTags: { tourism: 'information', information: 'board' },
+        candidateTags: { amenity: 'information', information: 'board' },
         matches: [
-          match(305, 2, 0, { tourism: 'information', information: 'board' }),
-          match(306, 4, 0, { tourism: 'information', information: 'guidepost' })
+          match(305, 2, 0, { amenity: 'information', information: 'board' }),
+          match(306, 4, 0, { amenity: 'information', information: 'guidepost' })
         ]
       })
     );
     expect(res).not.toBeNull();
     expect(res!.osm.osmId).toBe(305);
+  });
+});
+
+describe('review-only classes are never auto-snapped (issue #9)', () => {
+  it('statue: no snap even for a 2 m away object with identical tags', () => {
+    const tags = { tourism: 'artwork', artwork_type: 'statue' };
+    const res = decideSnap(
+      input({
+        featureType: 'statue',
+        uncertaintyM: 2,
+        candidateTags: { ...tags },
+        matches: [match(401, 2, 0, tags)]
+      })
+    );
+    expect(res).toBeNull();
+  });
+
+  it('stone_lantern: no snap under either plausible convention', () => {
+    for (const tags of [{ historic: 'stone_lantern' }, { man_made: 'stone_lantern' }]) {
+      const res = decideSnap(
+        input({
+          featureType: 'stone_lantern',
+          uncertaintyM: 2,
+          candidateTags: { ...tags },
+          matches: [match(402, 1, 0, tags)]
+        })
+      );
+      expect(res).toBeNull();
+    }
+  });
+
+  it('komainu (pure review-only, no mappings): no snap', () => {
+    const res = decideSnap(
+      input({
+        featureType: 'komainu',
+        uncertaintyM: 2,
+        candidateTags: { historic: 'sculpture' },
+        matches: [match(403, 1, 0, { historic: 'sculpture' })]
+      })
+    );
+    expect(res).toBeNull();
   });
 });

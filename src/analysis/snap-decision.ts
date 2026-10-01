@@ -17,7 +17,10 @@
  *      COMPETITOR_RANGE_FACTOR × dMax. Competitors are objects that also
  *      match the class AND agree on the candidate's identifying tags —
  *      an object whose subtype contradicts the candidate is a different
- *      object and does not create ambiguity.
+ *      object and does not create ambiguity;
+ *   5. the feature class is NOT review-only (autoTag=false, issue #9):
+ *      unconfirmed OSM semantics must never drive automatic
+ *      object-identity assignment.
  *
  * Otherwise the candidate stays at its estimated (or bounded
  * aerial-refined) position. Snap failures are silent for the caller:
@@ -25,7 +28,7 @@
  */
 import { distanceMeters } from './position';
 import { scoreTagsForClass } from '../osm/overpass';
-import { commonValuesFor, suggestedTagsFor } from '../analysis/feature-classes';
+import { commonValuesFor, getFeatureClass, suggestedTagsFor } from '../analysis/feature-classes';
 import type { OsmMatch, OsmType, PositionEvidence } from '../types';
 
 export interface SnapInput {
@@ -118,6 +121,12 @@ export function identifyingTagConflicts(
 }
 
 export function decideSnap(input: SnapInput): SnapDecision | null {
+  // Review-only guard (issue #9): classes whose OSM mapping is uncertain
+  // or ambiguous are never auto-snapped — the reviewer must confirm the
+  // semantics (and, if appropriate, link the object) manually.
+  const cls = getFeatureClass(input.featureType);
+  if (cls && !cls.autoTag) return null;
+
   const scored = input.matches
     .map((m) => ({
       m,

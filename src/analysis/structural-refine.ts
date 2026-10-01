@@ -28,7 +28,9 @@ export const STRUCTURE_BOUND_TYPES = new Set([
   'vending_machine',
   'aed',
   'information_board',
-  'toilets'
+  'toilets',
+  // Fire extinguishers are normally mounted on building walls (issue #9).
+  'fire_extinguisher'
 ]);
 
 export interface RefineResult {

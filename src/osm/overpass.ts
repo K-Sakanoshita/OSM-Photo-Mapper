@@ -58,6 +58,11 @@ function escRegex(v: string): string {
  *  - no values  -> key presence:     ["playground"~".+"]  (e.g. playground
  *                                    equipment, whose type must not be guessed)
  *
+ * Review-only classes (autoTag=false, issue #9) contribute the tag values
+ * of their candidate mappings, so existing objects using ANY of the
+ * plausible conventions (e.g. historic= vs man_made=stone_lantern) are
+ * found and can be linked.
+ *
  * Overpass set unions de-duplicate, so a node matching several clauses is
  * returned once.
  */
@@ -69,6 +74,17 @@ export function buildTagClauses(): string[] {
       const set = byKey.get(k) ?? new Set<string>();
       set.add(v);
       byKey.set(k, set);
+    }
+    // Review-only classes (issue #9): candidate mappings are plausible OSM
+    // semantics — include their values in the search.
+    if (!cls.autoTag) {
+      for (const m of cls.mappings ?? []) {
+        for (const [k, v] of Object.entries(m.tags)) {
+          const set = byKey.get(k) ?? new Set<string>();
+          set.add(v);
+          byKey.set(k, set);
+        }
+      }
     }
     // Classes with no required tags (e.g. playground equipment) are still
     // searched by key presence of their defining keys (suggested +

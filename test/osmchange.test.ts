@@ -162,3 +162,61 @@ describe('buildOsmChange', () => {
     expect(res.modifies).toBe(0);
   });
 });
+
+describe('geometry policy (issue #9): no polygon fabrication', () => {
+  it('does not create area-based candidates; reports them in geometryBlocked', () => {
+    const c = candidate({ featureType: 'playground_area', tags: { leisure: 'playground' } });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(0);
+    expect(res.geometryBlocked).toHaveLength(1);
+    expect(res.geometryBlocked[0].candidateId).toBe(c.id);
+    expect(res.geometryBlocked[0].featureType).toBe('playground_area');
+    expect(res.geometryBlocked[0].reason).toContain('does not fabricate');
+    expect(res.xml).toBe('');
+  });
+
+  it('still creates node/either-based candidates', () => {
+    const c = candidate({ featureType: 'bollard', tags: { barrier: 'bollard' } });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.geometryBlocked).toEqual([]);
+    expect(res.xml).toContain('<create>');
+    expect(res.xml).toContain('<tag k="barrier" v="bollard"/>');
+  });
+
+  it('mixes: node class created, area class blocked', () => {
+    const benchC = candidate();
+    const areaC = candidate({ featureType: 'playground_area', tags: { leisure: 'playground' } });
+    const res = buildOsmChange(survey([benchC, areaC]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.geometryBlocked).toHaveLength(1);
+    expect(res.xml).toContain('<tag k="amenity" v="bench"/>');
+    expect(res.xml).not.toContain('leisure');
+    expect(res.xml).not.toContain('playground');
+  });
+
+  it('does not block existing-object modifications for area classes', () => {
+    const c = candidate({
+      featureType: 'playground_area',
+      status: 'existing',
+      linkedOsmId: 2001,
+      linkedOsmType: 'node',
+      tags: { name: 'Town Playground' }
+    });
+    const res = buildOsmChange(
+      survey([c]),
+      liveOf(liveNode(2001, 2, { leisure: 'playground' }))
+    );
+    expect(res.modifies).toBe(1);
+    expect(res.geometryBlocked).toEqual([]);
+    expect(res.xml).toContain('<node id="2001" version="2"');
+    expect(res.xml).toContain('<tag k="leisure" v="playground"/>');
+  });
+
+  it('treats unknown feature types as node-based (creates allowed)', () => {
+    const c = candidate({ featureType: 'mystery', tags: { random: 'tag' } });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.geometryBlocked).toEqual([]);
+  });
+});
