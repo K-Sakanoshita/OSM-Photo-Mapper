@@ -1,13 +1,30 @@
-import type { BBox, GpsSample, Photo } from '../types';
+import type { BBox, GpsSample, Observation, Photo, PositionQuality } from '../types';
+import {
+  DEFAULT_HEADING_UNCERTAINTY_DEG,
+  headingUncertaintyDeg,
+} from '../capture/orientation';
 
 /**
- * Position estimation helpers.
+ * Position estimation helpers (issue #3).
  *
- * The estimator returns a candidate position plus supporting evidence, not an
+ * The estimator returns a candidate position plus supporting EVIDENCE, not an
  * assertion that the coordinate is correct. Each observation casts a bearing
- * "ray" from the capture location; the estimate is the ray intersection
- * (least-squares) when multiple observations of the same object are available,
- * or the best single-ray projection otherwise.
+ * "ray" from the camera position at capture; the estimate is the weighted
+ * ray intersection when multiple observations of the same object are
+ * available, or the best single-ray projection otherwise.
+ *
+ * Every output carries:
+ *  - `uncertaintyMeters`: a 1-sigma horizontal uncertainty DERIVED FROM THE
+ *    EVIDENCE (GPS accuracy, heading quality, distance uncertainty, camera
+ *    position age, fit error) — never a function of confidence alone.
+ *  - `positionQuality`: an explicit classification (triangulated / single-ray
+ *    / weak-geometry / contradictory / no-orientation) so reviewers can tell
+ *    a strong triangulation from an ill-conditioned one.
+ *  - `warnings`: human-readable evidence flags (nearly parallel rays, short
+ *    baseline, stale GPS, contradictory distances, ...).
+ *
+ * A position is only an evidence-backed PROPOSAL: snapping is a separate,
+ * conservative decision (see snap-decision.ts).
  */
 
 const EARTH_RADIUS = 6371000; // meters
@@ -32,34 +49,58 @@ export function bearingToLatLon(
   const lambda1 = toRad(lonDeg);
 
   const phi2 = Math.asin(
-    Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta)
+    sin(phi1) * cos(delta) + cos(phi1) * sin(delta) * cos(theta)
   );
   const lambda2 =
     lambda1 +
-    Math.atan2(
-      Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
-      Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+    atan2(
+      sin(theta) * sin(delta) * cos(phi1),
+      cos(delta) - sin(phi1) * sin(phi2)
     );
 
   return { lat: (phi2 * 180) / Math.PI, lon: (lambda2 * 180) / Math.PI };
 }
 
+// Small math aliases keep the geodesic formulae readable.
+const { sin, cos, tan, asin, atan2, sqrt, max, min } = Math;
+
 /** Assumed GPS accuracy (m) when a fix reports none — a conservative
  * middle value, so unknown accuracy is never treated as perfect. */
 const ASSUMED_ACCURACY_M = 10;
 
+/** When a distance estimate has no uncertainty, assume ±50% of it
+ * (conservative; distance-from-image is a weak signal). */
+const DEFAULT_DISTANCE_UNCERTAINTY_FRAC = 0.5;
+const MIN_DISTANCE_UNCERTAINTY_M = 2;
+
+/** Typical walking speed (m/s): how far a person drifts per second of
+ * camera-position staleness. */
+const WALK_SPEED_MPS = 1.4;
+/** Camera positions older than this relative to capture are flagged stale. */
+export const STALE_CAMERA_MS = 30_000;
+
+/** Crossing angles below this make ray triangulation ill-conditioned. */
+export const PARALLEL_CROSSING_DEG = 20;
+/** Baselines shorter than this give a weak triangulation. */
+export const MIN_BASELINE_M = 10;
+/** Mean angular fit error above this marks the observations contradictory. */
+export const CONTRADICTORY_FIT_DEG = 30;
+
+/** Nominal horizontal field of view of a phone camera (deg). */
+export const NOMINAL_FOV_DEG = 62;
+
 /**
  * Refine the capture heading using where the object sits in the image.
  *
- * An object near the right/left edge should not be projected along the optical
- * centerline. We assume a nominal horizontal field of view (default ~62deg,
- * typical of a phone camera) and map the bbox center's horizontal offset to a
- * bearing offset.
+ * An object near the right/left edge should not be projected along the
+ * optical centerline. We assume a nominal horizontal field of view
+ * (default ~62deg, typical of a phone camera) and map the bbox center's
+ * horizontal offset to a bearing offset.
  */
 export function imageBearing(
   headingDeg: number,
   bbox: BBox,
-  horizontalFovDeg = 62
+  horizontalFovDeg = NOMINAL_FOV_DEG
 ): number {
   const centerU = bbox.x + bbox.w / 2; // 0..1 across image width
   const offset = (centerU - 0.5) * horizontalFovDeg;
@@ -70,7 +111,8 @@ export function normalizeBearing(deg: number): number {
   return ((deg % 360) + 360) % 360;
 }
 
-/** A single cast ray from a capture position toward an observed object. */
+/** A single cast ray from a camera position toward an observed object,
+ *  carrying the quality evidence of each input (issue #3). */
 export interface ObservationRay {
   lat: number;
   lon: number;
@@ -80,24 +122,69 @@ export interface ObservationRay {
   gpsAccuracy?: number;
   /** Whether the bearing is grounded in real orientation data. */
   hasHeading: boolean;
+  /** 1-sigma bearing uncertainty in degrees (heading quality + bbox
+   *  offset spread). Absent when hasHeading is false. */
+  bearingUncDeg?: number;
+  /** 1-sigma distance uncertainty in meters; absent when unknown. */
+  distanceUncertaintyM?: number;
+  /** How stale the camera position is relative to capture (ms). */
+  cameraAgeMs?: number;
+  /** Provenance of the camera position (track / capture-fix / exif). */
+  cameraSource?: string;
 }
 
-/** A candidate position estimate with evidence. */
+/** A candidate position estimate with full evidence. */
 export interface PositionEstimate {
   lat: number;
   lon: number;
-  /** 0..1 confidence in the position. */
+  /** 0..1 confidence in the quality of the position EVIDENCE (not a
+   *  probability that the coordinate is exact). */
   positionConfidence: number;
+  /** 1-sigma horizontal uncertainty in meters, derived from the evidence. */
+  uncertaintyMeters: number;
+  /** Quality classification for the review UI (issue #3). */
+  positionQuality: PositionQuality;
   warnings: string[];
+}
+
+/** Per-ray evidence values used by the estimator. */
+interface RayEvidence {
+  gpsAcc: number;
+  /** 1-sigma bearing uncertainty (deg); undefined without a heading. */
+  bearingUncDeg: number | undefined;
+  /** 1-sigma distance uncertainty (m); undefined when no distance. */
+  distanceUncM: number | undefined;
+  /** Position drift (m) attributable to camera-position staleness. */
+  ageDriftM: number;
+}
+
+function rayEvidence(r: ObservationRay): RayEvidence {
+  const gpsAcc = r.gpsAccuracy ?? ASSUMED_ACCURACY_M;
+  const bearingUncDeg = r.hasHeading
+    ? r.bearingUncDeg ?? DEFAULT_HEADING_UNCERTAINTY_DEG
+    : undefined;
+  const distanceUncM =
+    r.distanceM > 0
+      ? r.distanceUncertaintyM ??
+        max(MIN_DISTANCE_UNCERTAINTY_M, r.distanceM * DEFAULT_DISTANCE_UNCERTAINTY_FRAC)
+      : undefined;
+  const ageDriftM =
+    r.cameraAgeMs != null ? (r.cameraAgeMs / 1000) * WALK_SPEED_MPS : 0;
+  return { gpsAcc, bearingUncDeg, distanceUncM, ageDriftM };
 }
 
 /**
  * Estimate an object's position from one or more observation rays.
  *
- * With a single ray we project along it (weak, distance-dependent). With
- * multiple rays we intersect them: for each ray we sample candidate points
- * along it and minimize the summed angular deviation, which is more robust
- * than naive pairwise intersection when headings are noisy.
+ *  - No usable heading anywhere: the GPS positions themselves are the
+ *    evidence -> weighted centroid, quality 'no-orientation'.
+ *  - Exactly one usable ray: project along it (distance-dominated),
+ *    quality 'single-ray'.
+ *  - Two or more usable rays: weighted ray intersection. The fit is
+ *    weighted by bearing quality (precise compass rays outweigh
+ *    approximate ones), and distance evidence is checked for
+ *    consistency. The geometry (crossing angle, baseline) is classified
+ *    explicitly instead of being hidden inside a confidence number.
  */
 export function estimatePosition(rays: ObservationRay[]): PositionEstimate {
   const warnings: string[] = [];
@@ -106,86 +193,342 @@ export function estimatePosition(rays: ObservationRay[]): PositionEstimate {
     throw new Error('estimatePosition requires at least one ray');
   }
 
-  const hasAnyHeading = rays.some((r) => r.hasHeading);
-  if (!hasAnyHeading) {
-    warnings.push('No orientation data: position is based on GPS only, not camera direction.');
+  const headingRays = rays.filter((r) => r.hasHeading);
+  pushStaleWarnings(warnings, rays);
+
+  if (headingRays.length === 0) {
+    return estimateNoOrientation(rays, warnings);
   }
 
-  if (rays.length === 1) {
-    const r = rays[0];
-    const d = r.distanceM;
-    const { lat, lon } = bearingToLatLon(r.lat, r.lon, r.bearingDeg, d);
-    // Unknown accuracy is penalized as 10 m: conservative, never assumed
-    // perfect (issue #10 — EXIF GPS carries no accuracy report).
-    const acc = r.gpsAccuracy ?? ASSUMED_ACCURACY_M;
-    // Confidence drops with GPS accuracy and with an unknown distance.
-    let confidence = clamp01(1 - acc / 100);
-    if (!r.hasHeading) confidence *= 0.4;
-    if (d <= 0) {
-      confidence *= 0.3;
-      warnings.push('No distance estimate: position approximated by capture location.');
+  if (headingRays.length === 1) {
+    if (rays.length > 1) {
+      warnings.push(
+        `Only 1 of ${rays.length} observations has usable orientation; triangulation not possible.`
+      );
     }
-    if (d <= 0) {
-      // Fall back to capture location.
-      return { lat: r.lat, lon: r.lon, positionConfidence: confidence * 0.5, warnings };
-    }
-    return { lat, lon, positionConfidence: confidence, warnings };
+    return estimateSingleRay(headingRays[0], warnings);
   }
 
-  // Multi-ray: coarse-to-fine search minimizing summed angular deviation.
-  const centroid = rays.reduce(
-    (acc, r) => ({ lat: acc.lat + r.lat / rays.length, lon: acc.lon + r.lon / rays.length }),
+  return estimateMultiRay(headingRays, warnings);
+}
+
+function pushStaleWarnings(warnings: string[], rays: ObservationRay[]): void {
+  for (const r of rays) {
+    if (r.cameraAgeMs != null && r.cameraAgeMs > STALE_CAMERA_MS) {
+      warnings.push(
+        `Camera position is stale (${Math.round(r.cameraAgeMs / 1000)} s before capture) — the observer may have moved since the fix.`
+      );
+    }
+  }
+}
+
+/* ---------------- no orientation: GPS positions only ---------------- */
+
+function estimateNoOrientation(
+  rays: ObservationRay[],
+  warnings: string[]
+): PositionEstimate {
+  warnings.push(
+    'No orientation data: position is based on GPS only, not camera direction.'
+  );
+  // Accuracy-weighted centroid (precise fixes outweigh coarse ones).
+  let wx = 0;
+  let wy = 0;
+  let wsum = 0;
+  let accSqSum = 0;
+  let maxDrift = 0;
+  for (const r of rays) {
+    const e = rayEvidence(r);
+    const w = 1 / (e.gpsAcc * e.gpsAcc);
+    wx += w * r.lat;
+    wy += w * r.lon;
+    wsum += w;
+    accSqSum += e.gpsAcc * e.gpsAcc;
+    maxDrift = max(maxDrift, e.ageDriftM);
+  }
+  const lat = wx / wsum;
+  const lon = wy / wsum;
+  const meanAcc = sqrt(accSqSum / rays.length);
+  const uncertaintyMeters = sqrt(meanAcc * meanAcc + maxDrift * maxDrift);
+  const positionConfidence = min(clamp01(1 - uncertaintyMeters / 80), 0.2);
+  return {
+    lat,
+    lon,
+    positionConfidence,
+    uncertaintyMeters,
+    positionQuality: 'no-orientation',
+    warnings,
+  };
+}
+
+/* ---------------- single-ray projection ---------------- */
+
+function estimateSingleRay(
+  r: ObservationRay,
+  warnings: string[]
+): PositionEstimate {
+  const e = rayEvidence(r);
+  const d = r.distanceM;
+
+  if (d <= 0) {
+    warnings.push('No distance estimate: position approximated by capture location.');
+    const uncertaintyMeters = sqrt(
+      e.gpsAcc * e.gpsAcc + e.ageDriftM * e.ageDriftM
+    );
+    return {
+      lat: r.lat,
+      lon: r.lon,
+      positionConfidence: min(clamp01(1 - uncertaintyMeters / 80), 0.25),
+      uncertaintyMeters,
+      positionQuality: 'single-ray',
+      warnings,
+    };
+  }
+
+  const { lat, lon } = bearingToLatLon(r.lat, r.lon, r.bearingDeg, d);
+  // Bearing error maps to lateral error: d * tan(uncertainty angle).
+  const lateral = d * tan(toRad(min(e.bearingUncDeg ?? DEFAULT_HEADING_UNCERTAINTY_DEG, 45)));
+  const uncertaintyMeters = sqrt(
+    e.gpsAcc * e.gpsAcc +
+      e.ageDriftM * e.ageDriftM +
+      lateral * lateral +
+      (e.distanceUncM ?? 0) * (e.distanceUncM ?? 0)
+  );
+  return {
+    lat,
+    lon,
+    // A single ray is inherently weaker than a triangulation: capped.
+    positionConfidence: min(clamp01(1 - uncertaintyMeters / 60), 0.5),
+    uncertaintyMeters,
+    positionQuality: 'single-ray',
+    warnings,
+  };
+}
+
+/* ---------------- multi-ray weighted intersection ---------------- */
+
+function estimateMultiRay(
+  headingRays: ObservationRay[],
+  warnings: string[]
+): PositionEstimate {
+  const centroid = headingRays.reduce(
+    (acc, r) => ({ lat: acc.lat + r.lat / headingRays.length, lon: acc.lon + r.lon / headingRays.length }),
     { lat: 0, lon: 0 }
   );
 
-  let best = { lat: centroid.lat, lon: centroid.lon, error: Number.POSITIVE_INFINITY };
-  let lo = 1;
-  let hi = 200; // meters of search radius around centroid
+  // Weights: precise bearings dominate the fit (issue #3 blocker 3:
+  // weight GPS accuracy, heading uncertainty, distance uncertainty).
+  const weights = headingRays.map(
+    (r) => 1 / (rayEvidence(r).bearingUncDeg ?? DEFAULT_HEADING_UNCERTAINTY_DEG)
+  );
 
-  for (let pass = 0; pass < 5; pass++) {
-    const span = hi - lo;
-    const steps = pass === 0 ? 12 : 16;
-    for (let i = 0; i <= steps; i++) {
-      const radius = lo + (span * i) / steps;
-      for (let a = 0; a < 360; a += 30) {
+  // Progressive search: a coarse full-circle grid, then refinement passes
+  // that shrink BOTH windows (radius around the best radius, bearing around
+  // the best bearing) with finer steps. The bearing window MUST track the
+  // best bearing — with a fixed 30deg angular grid the optimizer can slide
+  // outward along a grid line and settle on a false minimum that never
+  // approaches the true intersection.
+  let best = {
+    lat: centroid.lat,
+    lon: centroid.lon,
+    error: Number.POSITIVE_INFINITY,
+    r: 0,
+    a: 0
+  };
+  // The search radius is BOUNDED. An unbounded range lets the optimizer
+  // slide arbitrarily far along a ray to shrink the mean angular error —
+  // contradictory rays (no forward intersection) then look "fit" because
+  // their bearings converge asymptotically. Distance evidence anchors the
+  // bound; without it we cap at a realistic phone-survey range.
+  const anchors = headingRays
+    .filter((r) => r.distanceM > 0)
+    .map((r) => {
+      const e = rayEvidence(r);
+      const cDist = distanceMeters(centroid.lat, centroid.lon, r.lat, r.lon);
+      return cDist + r.distanceM + (e.distanceUncM ?? 0) * 2 + 50;
+    });
+  const searchHi = Math.max(200, ...anchors);
+  let rLo = 1;
+  let rHi = searchHi;
+  let aCenter = 0;
+  let aHalf = 180; // full circle for the coarse pass
+
+  for (let pass = 0; pass < 6; pass++) {
+    const rSteps = pass === 0 ? 12 : 24;
+    const aSteps = pass === 0 ? 12 : 24;
+    for (let i = 0; i <= rSteps; i++) {
+      const radius = rLo + ((rHi - rLo) * i) / rSteps;
+      for (let j = 0; j <= aSteps; j++) {
+        const a = normalizeBearing(aCenter - aHalf + (2 * aHalf * j) / aSteps);
         const cand = bearingToLatLon(centroid.lat, centroid.lon, a, radius);
-        const err = totalAngularError(cand.lat, cand.lon, rays);
-        if (err < best.error) best = { lat: cand.lat, lon: cand.lon, error: err };
+        const err = weightedAngularError(cand.lat, cand.lon, headingRays, weights);
+        if (err < best.error) {
+          best = { lat: cand.lat, lon: cand.lon, error: err, r: radius, a };
+        }
       }
     }
-    // Tighten bounds around the best.
-    const bd = distanceMeters(centroid.lat, centroid.lon, best.lat, best.lon);
-    const margin = Math.max(10, bd * 0.5);
-    lo = Math.max(1, bd - margin);
-    hi = bd + margin;
+    rLo = max(1, best.r - max(10, best.r * 0.4));
+    rHi = Math.min(searchHi, best.r + max(10, best.r * 0.4));
+    aCenter = best.a;
+    aHalf = max(2, aHalf / 2);
   }
 
-  // Angular error (degrees) -> confidence. Small error = high confidence.
-  const confidence = clamp01(1 - best.error / 90);
-  const accs = rays.map((r) => r.gpsAccuracy).filter((a): a is number => a != null);
+  const fitErrDeg = best.error;
+
+  // --- Geometry quality (issue #3 blocker 2) --------------------------
+  const origins = headingRays.map((r) => ({ lat: r.lat, lon: r.lon }));
+  const baselineM = maxPairwiseDistance(origins);
+  const crossingDeg = minCrossingAngle(headingRays);
+
+  // --- Distance consistency (distance evidence, issue #3 blocker 3) ---
+  const distConflicts: string[] = [];
+  let meanSolutionDist = 0;
+  let distCount = 0;
+  for (const r of headingRays) {
+    const e = rayEvidence(r);
+    const dSol = distanceMeters(r.lat, r.lon, best.lat, best.lon);
+    if (r.distanceM > 0) {
+      meanSolutionDist += dSol;
+      distCount++;
+      const allowed = (e.distanceUncM ?? 0) + 0.5 * r.distanceM;
+      if (Math.abs(dSol - r.distanceM) > allowed) {
+        distConflicts.push(
+          `Distance evidence conflicts: observation says ~${Math.round(r.distanceM)} m, geometry implies ~${Math.round(dSol)} m.`
+        );
+      }
+    }
+  }
+  if (distCount > 0) meanSolutionDist /= distCount;
+
+  // --- Classification ---------------------------------------------------
+  let positionQuality: PositionQuality;
+  // Geometry is classified FIRST: with nearly parallel rays or a short
+  // baseline the fit error is inflated by the geometry itself, so a large
+  // fit error there is NOT evidence that the observations contradict each
+  // other — the geometry is the problem (issue #3 acceptance criterion).
+  if (crossingDeg < PARALLEL_CROSSING_DEG || baselineM < MIN_BASELINE_M) {
+    positionQuality = 'weak-geometry';
+    if (crossingDeg < PARALLEL_CROSSING_DEG) {
+      warnings.push(
+        `Rays are nearly parallel (min crossing angle ${crossingDeg.toFixed(0)}deg) — triangulation is ill-conditioned.`
+      );
+    }
+    if (baselineM < MIN_BASELINE_M) {
+      warnings.push(
+        `Camera baseline is only ${baselineM.toFixed(0)} m — triangulation is weak; move and shoot again.`
+      );
+    }
+    if (fitErrDeg > CONTRADICTORY_FIT_DEG) {
+      warnings.push(
+        `Observation rays also disagree (mean weighted angular deviation ${fitErrDeg.toFixed(0)}deg) — unreliable in this geometry.`
+      );
+    }
+    warnings.push(...distConflicts);
+  } else if (fitErrDeg > CONTRADICTORY_FIT_DEG || distConflicts.length > 0) {
+    positionQuality = 'contradictory';
+    if (fitErrDeg > CONTRADICTORY_FIT_DEG) {
+      warnings.push(
+        `Observation rays disagree (mean weighted angular deviation ${fitErrDeg.toFixed(0)}deg).`
+      );
+    }
+    warnings.push(...distConflicts);
+  } else {
+    positionQuality = 'triangulated';
+  }
+
+  // --- Evidence-derived uncertainty (issue #3 blocker 3) ----------------
+  const evidence = headingRays.map(rayEvidence);
+  const meanAcc = evidence.reduce((s, e) => s + e.gpsAcc, 0) / evidence.length;
+  const maxDrift = evidence.reduce((s, e) => max(s, e.ageDriftM), 0);
+  // Angular fit error maps to lateral error at the mean solution distance
+  // (tan is capped: beyond 60deg the geometry has stopped being evidence).
+  const uAng = meanSolutionDist * tan(toRad(min(fitErrDeg, 60)));
+  let uncertaintyMeters = sqrt(
+    meanAcc * meanAcc + maxDrift * maxDrift + uAng * uAng
+  );
+  if (positionQuality === 'weak-geometry') {
+    // Parallel rays: even a small angle error yields a large lateral error.
+    uncertaintyMeters = max(
+      uncertaintyMeters,
+      meanSolutionDist * tan(toRad(30))
+    );
+  } else if (positionQuality === 'contradictory') {
+    uncertaintyMeters = max(
+      uncertaintyMeters,
+      meanSolutionDist * tan(toRad(45))
+    );
+  }
+
+  const accs = headingRays.map((r) => r.gpsAccuracy).filter((a): a is number => a != null);
   if (accs.length === 0) {
     warnings.push('GPS accuracy unknown for all rays; position quality unverified.');
   } else {
-    const meanAcc = accs.reduce((s, a) => s + a, 0) / accs.length;
-    if (meanAcc > 20) warnings.push(`GPS accuracy is coarse (mean ~${Math.round(meanAcc)} m).`);
+    const meanAccReported = accs.reduce((s, a) => s + a, 0) / accs.length;
+    if (meanAccReported > 20)
+      warnings.push(`GPS accuracy is coarse (mean ~${Math.round(meanAccReported)} m).`);
   }
-  if (best.error > 30) warnings.push('Observation rays disagree; position is low confidence.');
 
-  return { lat: best.lat, lon: best.lon, positionConfidence: confidence, warnings };
+  const base = clamp01(1 - uncertaintyMeters / 40);
+  const positionConfidence =
+    positionQuality === 'weak-geometry'
+      ? min(base, 0.4)
+      : positionQuality === 'contradictory'
+        ? min(base, 0.2)
+        : base;
+
+  return {
+    lat: best.lat,
+    lon: best.lon,
+    positionConfidence,
+    uncertaintyMeters,
+    positionQuality,
+    warnings,
+  };
 }
 
-/** Sum of (absolute) angular deviations from the candidate point to each ray origin. */
-function totalAngularError(lat: number, lon: number, rays: ObservationRay[]): number {
+/** Weighted mean angular deviation (degrees) from a candidate point to the
+ *  ray origins; precise bearings (larger weight) dominate the fit. */
+function weightedAngularError(
+  lat: number,
+  lon: number,
+  rays: ObservationRay[],
+  weights: number[]
+): number {
   let sum = 0;
-  for (const r of rays) {
-    if (!r.hasHeading) continue;
+  let wsum = 0;
+  for (let i = 0; i < rays.length; i++) {
+    const r = rays[i];
     const actual = bearingBetween(r.lat, r.lon, lat, lon);
     let diff = Math.abs(actual - r.bearingDeg);
     if (diff > 180) diff = 360 - diff;
-    sum += diff;
+    sum += weights[i] * diff;
+    wsum += weights[i];
   }
-  const n = rays.filter((r) => r.hasHeading).length || 1;
-  return sum / n;
+  return sum / (wsum || 1);
+}
+
+/** Largest pairwise great-circle distance between the ray origins (m). */
+function maxPairwiseDistance(origins: { lat: number; lon: number }[]): number {
+  let best = 0;
+  for (let i = 0; i < origins.length; i++) {
+    for (let j = i + 1; j < origins.length; j++) {
+      best = max(best, distanceMeters(origins[i].lat, origins[i].lon, origins[j].lat, origins[j].lon));
+    }
+  }
+  return best;
+}
+
+/** Smallest pairwise crossing angle between ray bearings (0..180 deg). */
+function minCrossingAngle(rays: ObservationRay[]): number {
+  let best = 180;
+  for (let i = 0; i < rays.length; i++) {
+    for (let j = i + 1; j < rays.length; j++) {
+      let diff = Math.abs(rays[i].bearingDeg - rays[j].bearingDeg) % 360;
+      if (diff > 180) diff = 360 - diff;
+      best = min(best, diff);
+    }
+  }
+  return best;
 }
 
 /** Initial bearing (deg) from point A (lat/lon) to point B. */
@@ -198,10 +541,9 @@ export function bearingBetween(
   const phi1 = toRad(lat1);
   const phi2 = toRad(lat2);
   const dLon = toRad(lon2 - lon1);
-  const y = Math.sin(dLon) * Math.cos(phi2);
-  const x =
-    Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
-  return normalizeBearing((Math.atan2(y, x) * 180) / Math.PI);
+  const y = sin(dLon) * cos(phi2);
+  const x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dLon);
+  return normalizeBearing((atan2(y, x) * 180) / Math.PI);
 }
 
 /** Great-circle distance in meters between two points. */
@@ -215,9 +557,8 @@ export function distanceMeters(
   const phi2 = toRad(lat2);
   const dPhi = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS * Math.asin(Math.min(1, Math.sqrt(a)));
+  const a = sin(dPhi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS * asin(min(1, sqrt(a)));
 }
 
 function clamp01(v: number): number {
@@ -231,10 +572,10 @@ function clamp01(v: number): number {
  * `at` and the first sample after it) via binary search, then linearly
  * interpolates between exactly that pair (bearing/rate interpolation over
  * short walking intervals is a good approximation). This avoids both
- * snapping the photo to a seconds-old fix and interpolating across the wrong
- * interval (e.g. picking the *nearest* sample first and then pairing it with
- * its predecessor can select the A-B interval when the capture is actually
- * between B and C).
+ * snapping the photo to a seconds-old fix and interpolating across the
+ * wrong interval (e.g. picking the *nearest* sample first and then pairing
+ * it with its predecessor can select the A-B interval when the capture is
+ * actually between B and C).
  *
  * Out-of-range timestamps return the nearest endpoint sample unchanged; an
  * exact sample hit returns that sample unchanged.
@@ -300,24 +641,52 @@ function interpolateHeading(fromDeg: number, toDeg: number, t: number): number {
 
 /**
  * Build an observation ray from a photo + its detected object.
- * If the photo lacks heading, the ray has no usable bearing and is marked
- * hasHeading=false (still contributes its position as a centroid anchor).
+ *
+ * The ray origin is the CAMERA position at capture (issue #10
+ * `photo.cameraPosition`, with the legacy `photo.gps` alias as fallback),
+ * and the ray carries the quality evidence of every input: heading quality
+ * (issue #3 blocker 1), distance uncertainty (blocker 3) and camera
+ * position age/provenance (blocker 4).
  */
 export function rayFromPhoto(
   photo: Photo,
-  bbox: BBox,
-  distanceM?: number
+  obs: Pick<Observation, 'bbox' | 'distanceEstimate' | 'distanceUncertaintyM'>
 ): ObservationRay | null {
-  const gps = photo.gps;
-  if (!gps) return null;
+  const cam =
+    photo.cameraPosition ??
+    (photo.gps
+      ? {
+          lat: photo.gps.lat,
+          lon: photo.gps.lon,
+          accuracy: photo.gps.accuracy,
+          timestamp: photo.timestamp,
+          fixTimestamp: photo.timestamp,
+          ageMs: 0,
+          source: 'track' as const,
+        }
+      : undefined);
+  if (!cam) return null;
+
   const hasHeading = photo.heading != null;
-  const bearingDeg = hasHeading ? imageBearing(photo.heading!, bbox) : 0;
+  const bearingDeg = hasHeading ? imageBearing(photo.heading!, obs.bbox) : 0;
+  const headingUnc = hasHeading ? headingUncertaintyDeg(photo.headingSource) : undefined;
+  const bearingUncDeg =
+    hasHeading && headingUnc != null
+      ? // RSS of the heading quality uncertainty and the bbox-center
+        // assumption (the object could be anywhere within the bbox width).
+        sqrt(headingUnc ** 2 + ((obs.bbox.w / 2) * NOMINAL_FOV_DEG) ** 2)
+      : undefined;
+
   return {
-    lat: gps.lat,
-    lon: gps.lon,
+    lat: cam.lat,
+    lon: cam.lon,
     bearingDeg,
-    distanceM: distanceM ?? 0,
-    gpsAccuracy: gps.accuracy,
+    distanceM: obs.distanceEstimate ?? 0,
+    gpsAccuracy: cam.accuracy,
     hasHeading,
+    bearingUncDeg,
+    distanceUncertaintyM: obs.distanceUncertaintyM,
+    cameraAgeMs: cam.ageMs,
+    cameraSource: cam.source,
   };
 }

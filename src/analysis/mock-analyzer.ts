@@ -130,7 +130,7 @@ export class MockAnalyzer implements FeatureAnalyzer {
       .map((obs) => {
         const photo = survey.photos.find((p) => p.id === obs.photoId);
         if (!photo) return null;
-        return rayFromPhoto(photo, obs.bbox, obs.distanceEstimate);
+        return rayFromPhoto(photo, obs);
       })
       .filter((r): r is ObservationRay => r !== null);
 
@@ -138,12 +138,18 @@ export class MockAnalyzer implements FeatureAnalyzer {
     let lat: number | undefined;
     let lon: number | undefined;
     let positionConfidence = 0;
+    // Issue #3: evidence-derived quality + uncertainty travel with the
+    // candidate so review/export can classify it explicitly.
+    let positionQuality: FeatureCandidate['positionQuality'];
+    let positionUncertaintyMeters: number | undefined;
 
     if (rays.length > 0) {
       const est = estimatePosition(rays);
       lat = est.lat;
       lon = est.lon;
       positionConfidence = est.positionConfidence;
+      positionQuality = est.positionQuality;
+      positionUncertaintyMeters = est.uncertaintyMeters;
       warnings.push(...est.warnings);
       // Issue #5: weakly-determined positions must be flagged, not silently
       // snapped, so reviewers verify them before mapping.
@@ -168,6 +174,8 @@ export class MockAnalyzer implements FeatureAnalyzer {
       tags,
       observationIds: cluster.map((o) => o.id),
       osmMatches: [],
+      positionQuality,
+      positionUncertaintyMeters,
       warnings,
       status: 'new',
     };

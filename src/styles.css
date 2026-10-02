@@ -312,6 +312,20 @@ body[data-mode='upload'] #content { display: block; }
   margin-left: 4px;
   white-space: nowrap;
 }
+/* Issue #3: evidence-derived position quality classification. */
+.quality-chip {
+  display: inline-block;
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+.quality-chip.q-triangulated { background: #e6f4e8; color: #1e6b2e; }
+.quality-chip.q-single-ray { background: #fff7e0; color: #8a6d1a; }
+.quality-chip.q-weak-geometry { background: #fdecea; color: #a13229; }
+.quality-chip.q-contradictory { background: #f6dcd9; color: #8c1d12; }
+.quality-chip.q-no-orientation { background: #eceff3; color: #55606e; }
 .working-tag {
   display: inline-block;
   background: #fff7e0;

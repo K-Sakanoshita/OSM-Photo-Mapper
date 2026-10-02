@@ -3,6 +3,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { MapView } from './map/map-view';
 import { GeolocationTracker } from './capture/geolocation-tracker';
+import { OrientationTracker } from './capture/orientation';
+import { POSITION_QUALITY_LABEL } from './types';
 import { capturePhoto } from './capture/photo';
 import {
   requestOneShotFix,
@@ -113,6 +115,10 @@ class App {
   private mode: Mode = 'list';
   private survey: Survey | null = null;
   private tracker: GeolocationTracker | null = null;
+  /** Live orientation tracker (issue #3 blocker 1). Started from the photo
+   *  button (user gesture — required for the iOS permission prompt); read
+   *  synchronously at capture time. */
+  private orientationTracker = new OrientationTracker();
   /** One-shot GPS fix started in the photo button's gesture (issue #10). */
   private pendingFix: Promise<OneShotFix | null> | null = null;
   /** Latest live fix, used by the GPS status when not recording. */
@@ -373,6 +379,9 @@ class App {
           // lose the transient user activation and the camera would not
           // open. The fix is awaited (bounded) in onPhotoTaken instead.
           this.pendingFix = requestOneShotFix(15_000);
+          // Issue #3: the orientation permission (iOS) also requires a user
+          // gesture, so start the tracker in this same gesture.
+          this.orientationTracker.start();
           photoInput.click();
         }
       },
@@ -512,7 +521,9 @@ class App {
         file,
         track: s.gpsSamples,
         captureFix,
-        heading: this.tracker?.currentHeading,
+        // Issue #3 blocker 1: a normalized reading WITH QUALITY replaces the
+        // raw number — the estimator weights the heading by its quality.
+        orientation: this.orientationTracker.read(),
         note: noteEl?.value.trim() || undefined
       });
       s.photos.push(photo);
@@ -570,10 +581,14 @@ class App {
       for (const c of result.candidates) {
         if (c.lat == null || c.lon == null) continue;
         const est = { lat: c.lat, lon: c.lon };
-        const uncertainty = 3 + (1 - c.positionConfidence) * 30; // 3..33 m
+        // Issue #3: the uncertainty is EVIDENCE-DERIVED (GPS accuracy,
+        // heading quality, distance uncertainty, staleness, fit error) —
+        // not a function of confidence alone.
+        const uncertainty = c.positionUncertaintyMeters ?? 3 + (1 - c.positionConfidence) * 30;
         const solution: PositionSolution = {
           estimatedPosition: est,
           uncertaintyMeters: uncertainty,
+          positionQuality: c.positionQuality,
           evidence: [
             { source: 'ray-projection', label: `Ray projection (${c.observationIds.length} observation(s))` }
           ]
@@ -739,6 +754,19 @@ class App {
         el('b', {}, 'Position'),
         ` ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}  `,
         confSpan('pos', c.positionConfidence),
+        // Issue #3: the quality classification must be visible to the
+        // reviewer — it distinguishes a strong triangulation from a
+        // single-ray projection, weak geometry, or contradictory rays.
+        c.positionQuality
+          ? el(
+              'span',
+              { class: `quality-chip q-${c.positionQuality}`, title: 'Position quality (issue #3)' },
+              ` ${POSITION_QUALITY_LABEL[c.positionQuality]}`
+            )
+          : '',
+        c.positionUncertaintyMeters != null
+          ? ` · σ ${c.positionUncertaintyMeters.toFixed(0)} m`
+          : '',
         ' ',
         confSpan('tags', c.tagConfidence)
       );

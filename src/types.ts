@@ -81,10 +81,13 @@ export interface Photo {
   gps?: GpsSample;
   /** Camera heading at capture, degrees (when available). */
   heading?: number;
-  /** Provenance of `heading`: interpolated from the GPS track at capture
-   *  time ('track') or the device compass at file-picker return ('device',
-   *  a weaker fallback that can lag the true capture moment). */
-  headingSource?: 'track' | 'device';
+  /** Where the capture heading came from, with orientation quality
+   *  (issue #3 blocker 1): 'track' (heading interpolated from the GPS
+   *  track at capture time) or a device-orientation quality marker from
+   *  the OrientationTracker ('compass' / 'absolute-alpha' /
+   *  'approximate' — the weaker fallback used only when the track has no
+   *  heading). The marker drives the estimator's bearing uncertainty. */
+  headingSource?: 'track' | 'compass' | 'absolute-alpha' | 'approximate';
   /** Free-form field note. */
   note?: string;
 }
@@ -108,6 +111,9 @@ export interface Observation {
   bbox: BBox;
   /** Rough estimated distance to the object, meters (weak signal). */
   distanceEstimate?: number;
+  /** Uncertainty of the distance estimate, meters (issue #3 blocker 3).
+   *  When absent the estimator assumes a conservative default. */
+  distanceUncertaintyM?: number;
   /** Text visible in/around the object, if useful. */
   textSeen?: string;
   /** Suggested OSM tag key/value pairs. */
@@ -167,11 +173,36 @@ export interface PositionSolution {
   linkedOsmId?: number;
   /** Type of the linked OSM object (issue #4: identity is type + ID). */
   linkedOsmType?: OsmType;
-  /** Position uncertainty in meters (drives refinement/snap bounds). */
+  /** Position uncertainty in meters (drives refinement/snap bounds).
+   *  Evidence-derived (issue #3), not a function of confidence alone. */
   uncertaintyMeters: number;
+  /** Evidence-derived quality classification (issue #3). */
+  positionQuality?: PositionQuality;
   evidence: PositionEvidence[];
   snapConfidence?: number;
 }
+
+/**
+ * Quality classification of a position estimate (issue #3 acceptance):
+ * reviewers must be able to tell strong triangulation from a single-ray
+ * projection, weak/parallel geometry, missing orientation, and
+ * contradictory observations.
+ */
+export type PositionQuality =
+  | 'triangulated' // >=2 usable rays, good crossing geometry, low fit error
+  | 'single-ray' // projection along one bearing (distance-dominated)
+  | 'weak-geometry' // rays nearly parallel or baseline too short
+  | 'contradictory' // rays or distances strongly disagree
+  | 'no-orientation'; // no usable heading: GPS location only
+
+/** Human-readable label for a position quality (review UI). */
+export const POSITION_QUALITY_LABEL: Record<PositionQuality, string> = {
+  triangulated: 'Triangulated (multi-observation)',
+  'single-ray': 'Single-ray projection',
+  'weak-geometry': 'Weak geometry (nearly parallel rays)',
+  contradictory: 'Contradictory observations',
+  'no-orientation': 'No orientation (GPS only)',
+};
 
 export interface FeatureCandidate {
   id: string;
@@ -203,6 +234,10 @@ export interface FeatureCandidate {
   /** Provenance chain for the position (issue #8); provenance only —
    *  `lat`/`lon` remain the working position used for display/export. */
   positionSolution?: PositionSolution;
+  /** Quality classification of the position estimate (issue #3). */
+  positionQuality?: PositionQuality;
+  /** Evidence-derived 1-sigma position uncertainty, meters (issue #3). */
+  positionUncertaintyMeters?: number;
 }
 
 /**

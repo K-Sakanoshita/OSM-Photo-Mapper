@@ -2,6 +2,7 @@ import EXIF from 'exif-js';
 import type { GpsSample, Photo, TimestampSource } from '../types';
 import { trackPositionAt } from '../analysis/position';
 import { surveyDb } from '../db/survey-db';
+import type { HeadingReading } from './orientation';
 import {
   resolveCameraPosition,
   type ExifGps,
@@ -37,9 +38,10 @@ import {
  * it never becomes the object's own coordinates.
  *
  * Heading (issue #6): the heading interpolated from the track AT CAPTURE
- * TIME is preferred. The device heading at file-picker return is only an
- * explicit fallback (used when the track has no heading); the provenance is
- * recorded via Photo.headingSource.
+ * TIME is preferred. A live device-orientation reading (normalized with
+ * explicit quality, issue #3 blocker 1) is only an explicit fallback, used
+ * when the track has no heading; the provenance/quality is recorded via
+ * Photo.headingSource, which downstream evidence uses for weighting.
  */
 
 export interface CapturedPhotoInput {
@@ -53,9 +55,11 @@ export interface CapturedPhotoInput {
    *  input (issue #10). Used when the track does not cover the capture
    *  time. */
   captureFix?: OneShotFix | null;
-  /** Device compass heading at file-picker return. Fallback only: the
-   *  track heading at capture time takes precedence when available. */
-  heading?: number;
+  /** Live orientation reading at capture time (issue #3 blocker 1): a
+   *  normalized heading WITH QUALITY from the OrientationTracker. Fallback
+   *  only: the track heading at capture time takes precedence. Readings
+   *  without a geographic heading (relative/none) contribute nothing. */
+  orientation?: HeadingReading | null;
   note?: string;
 }
 
@@ -223,13 +227,20 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
   }
 
   // Prefer the heading associated with the capture-time track position;
-  // fall back to the runtime device heading only when the track has none.
+  // fall back to the live orientation reading only when the track has
+  // none. The reading's quality marker is recorded as headingSource
+  // (issue #3 blocker 1): it drives the estimator's bearing uncertainty.
   if (photo.gps?.heading != null) {
     photo.heading = photo.gps.heading;
     photo.headingSource = 'track';
-  } else if (input.heading != null) {
-    photo.heading = input.heading;
-    photo.headingSource = 'device';
+  } else {
+    const o = input.orientation;
+    if (o?.heading != null) {
+      photo.heading = o.heading;
+      if (o.quality === 'compass' || o.quality === 'absolute-alpha' || o.quality === 'approximate') {
+        photo.headingSource = o.quality;
+      }
+    }
   }
 
   await surveyDb.addPhoto(input.surveyId, photo);
