@@ -16,8 +16,8 @@ import {
   type OneShotFix
 } from '../src/capture/camera-position';
 
-function makeSample(id: string, ts: number, lat: number, lon: number, heading?: number): GpsSample {
-  return { id, lat, lon, accuracy: 5, timestamp: ts, heading };
+function makeSample(id: string, ts: number, lat: number, lon: number, movementHeading?: number): GpsSample {
+  return { id, lat, lon, accuracy: 5, timestamp: ts, movementHeading };
 }
 
 const A = makeSample('a', 1000, 48.8, 2.3, 90);
@@ -41,7 +41,7 @@ describe('trackCameraPosition', () => {
     expect(cp.lat).toBeCloseTo(48.8005, 6);
     expect(cp.lon).toBeCloseTo(2.3005, 6);
     expect(cp.accuracy).toBe(5);
-    expect(cp.heading).toBeDefined();
+    expect(cp.movementHeading).toBeDefined();
   });
 
   it('returns the exact sample at the span edges without interpolation', () => {

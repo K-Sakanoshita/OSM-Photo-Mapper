@@ -3,6 +3,7 @@ import type { GpsSample, Photo, TimestampSource } from '../types';
 import { trackPositionAt } from '../analysis/position';
 import { surveyDb } from '../db/survey-db';
 import type { HeadingReading } from './orientation';
+import { associateCameraHeading } from './orientation';
 import {
   resolveCameraPosition,
   type ExifGps,
@@ -37,11 +38,16 @@ import {
  * The camera position is evidence for locating the photographed object —
  * it never becomes the object's own coordinates.
  *
- * Heading (issue #6): the heading interpolated from the track AT CAPTURE
- * TIME is preferred. A live device-orientation reading (normalized with
- * explicit quality, issue #3 blocker 1) is only an explicit fallback, used
- * when the track has no heading; the provenance/quality is recorded via
- * Photo.headingSource, which downstream evidence uses for weighting.
+ * Camera heading (issue #3): the camera bearing comes ONLY from the
+ * device-orientation reading (the single normalized OrientationTracker
+ * path), and only when it is FRESH relative to the true capture time —
+ * `associateCameraHeading` (src/capture/orientation.ts) applies the
+ * freshness gate and records the full provenance (source, uncertainty,
+ * timestamp, age) on Photo.cameraHeading. Stale or post-return readings
+ * are rejected with an explicit headingNote. The GPS track's heading is
+ * the MOVEMENT bearing (direction of travel): it is recorded on
+ * Photo.movementHeading as contextual evidence and NEVER used as the
+ * camera bearing.
  */
 
 export interface CapturedPhotoInput {
@@ -55,10 +61,12 @@ export interface CapturedPhotoInput {
    *  input (issue #10). Used when the track does not cover the capture
    *  time. */
   captureFix?: OneShotFix | null;
-  /** Live orientation reading at capture time (issue #3 blocker 1): a
-   *  normalized heading WITH QUALITY from the OrientationTracker. Fallback
-   *  only: the track heading at capture time takes precedence. Readings
-   *  without a geographic heading (relative/none) contribute nothing. */
+  /** Live orientation reading at capture time (issue #3): the ONLY
+   *  source of the camera bearing. A normalized heading WITH QUALITY and
+   *  TIMESTAMP from the OrientationTracker. Subject to the freshness
+   *  gate in `associateCameraHeading` — stale or post-return readings
+   *  are rejected with an explicit headingNote. Readings without a
+   *  geographic heading (relative/none) contribute nothing. */
   orientation?: HeadingReading | null;
   note?: string;
 }
@@ -221,27 +229,23 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
       lon: cameraPosition.lon,
       accuracy: cameraPosition.accuracy,
       timestamp: cameraPosition.timestamp,
-      heading:
-        cameraPosition.source === 'track' ? trackPositionAt(input.track, timestamp)?.heading : undefined
+      // Direction of travel at capture — MOVEMENT bearing, contextual
+      // only (issue #3: never a camera bearing).
+      movementHeading:
+        cameraPosition.source === 'track' ? trackPositionAt(input.track, timestamp)?.movementHeading : undefined
     };
   }
 
-  // Prefer the heading associated with the capture-time track position;
-  // fall back to the live orientation reading only when the track has
-  // none. The reading's quality marker is recorded as headingSource
-  // (issue #3 blocker 1): it drives the estimator's bearing uncertainty.
-  if (photo.gps?.heading != null) {
-    photo.heading = photo.gps.heading;
-    photo.headingSource = 'track';
-  } else {
-    const o = input.orientation;
-    if (o?.heading != null) {
-      photo.heading = o.heading;
-      if (o.quality === 'compass' || o.quality === 'absolute-alpha' || o.quality === 'approximate') {
-        photo.headingSource = o.quality;
-      }
-    }
-  }
+  // Issue #3: the camera bearing comes ONLY from the device-orientation
+  // reading, and only when it passes the freshness gate relative to the
+  // true capture time. Full provenance (source, uncertainty, timestamp,
+  // age) is recorded on Photo.cameraHeading; rejections are explained on
+  // Photo.headingNote. The track's movement heading is stored separately
+  // as contextual evidence and never used as the camera bearing.
+  const { cameraHeading, headingNote } = associateCameraHeading(input.orientation, timestamp);
+  photo.cameraHeading = cameraHeading;
+  photo.headingNote = headingNote;
+  photo.movementHeading = trackPositionAt(input.track, timestamp)?.movementHeading;
 
   await surveyDb.addPhoto(input.surveyId, photo);
   return photo;

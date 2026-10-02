@@ -90,7 +90,7 @@ function makeLegacySurvey(
         source: 'track',
         interpolated: true
       },
-      heading: 90
+      movementHeading: 90
     }
   ];
   const cands: FeatureCandidate[] = [

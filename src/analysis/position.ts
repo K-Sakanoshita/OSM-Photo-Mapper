@@ -1,8 +1,12 @@
-import type { BBox, GpsSample, Observation, Photo, PositionQuality } from '../types';
-import {
-  DEFAULT_HEADING_UNCERTAINTY_DEG,
-  headingUncertaintyDeg,
-} from '../capture/orientation';
+import type {
+  BBox,
+  CameraHeadingSource,
+  GpsSample,
+  Observation,
+  Photo,
+  PositionQuality
+} from '../types';
+import { DEFAULT_HEADING_UNCERTAINTY_DEG } from '../capture/orientation';
 
 /**
  * Position estimation helpers (issue #3).
@@ -120,8 +124,15 @@ export interface ObservationRay {
   distanceM: number;
   /** Reported GPS accuracy (m) at capture; absent when unknown. */
   gpsAccuracy?: number;
-  /** Whether the bearing is grounded in real orientation data. */
+  /** Whether the bearing is grounded in a real camera heading (device
+   *  orientation). The movement/travel heading NEVER sets this (issue #3). */
   hasHeading: boolean;
+  /** Provenance of the camera heading: which orientation path produced
+   *  it (issue #3). Absent when hasHeading is false. */
+  headingSource?: CameraHeadingSource;
+  /** Age of the camera-heading reading relative to the shutter (ms);
+   *  absent when hasHeading is false (issue #3). */
+  headingAgeMs?: number;
   /** 1-sigma bearing uncertainty in degrees (heading quality + bbox
    *  offset spread). Absent when hasHeading is false. */
   bearingUncDeg?: number;
@@ -625,10 +636,13 @@ export function trackPositionAt(
     })(),
     timestamp: at,
     speed: a.speed != null && b.speed != null ? a.speed + (b.speed - a.speed) * t : undefined,
-    heading:
-      a.heading != null && b.heading != null
-        ? interpolateHeading(a.heading, b.heading, t)
-        : a.heading ?? b.heading
+    // Direction of travel is interpolated on the shortest arc, like any
+    // bearing — but it stays a MOVEMENT heading (issue #3), never a
+    // camera heading.
+    movementHeading:
+      a.movementHeading != null && b.movementHeading != null
+        ? interpolateHeading(a.movementHeading, b.movementHeading, t)
+        : a.movementHeading ?? b.movementHeading
   };
 }
 
@@ -642,11 +656,18 @@ function interpolateHeading(fromDeg: number, toDeg: number, t: number): number {
 /**
  * Build an observation ray from a photo + its detected object.
  *
- * The ray origin is the CAMERA position at capture (issue #10
- * `photo.cameraPosition`, with the legacy `photo.gps` alias as fallback),
- * and the ray carries the quality evidence of every input: heading quality
- * (issue #3 blocker 1), distance uncertainty (blocker 3) and camera
- * position age/provenance (blocker 4).
+ * The ray origin is the CAMERA position at capture (issue #10). The
+ * bearing is the photo's CAMERA heading — the device-orientation reading
+ * that passed the freshness gate (issue #3), with its full provenance
+ * (source, uncertainty, age) carried on the ray. The MOVEMENT heading
+ * (direction of travel, photo.movementHeading) is NEVER used as the ray
+ * bearing: when no camera heading is available, the ray is bearing-less
+ * and the estimator falls back to GPS-only evidence.
+ *
+ * The origin is `photo.cameraPosition` (issue #10, with the legacy
+ * `photo.gps` alias as fallback), and the ray carries the quality evidence
+ * of every input: camera-heading source/uncertainty/age (issue #3),
+ * distance uncertainty and camera position age/provenance.
  */
 export function rayFromPhoto(
   photo: Photo,
@@ -667,14 +688,16 @@ export function rayFromPhoto(
       : undefined);
   if (!cam) return null;
 
-  const hasHeading = photo.heading != null;
-  const bearingDeg = hasHeading ? imageBearing(photo.heading!, obs.bbox) : 0;
-  const headingUnc = hasHeading ? headingUncertaintyDeg(photo.headingSource) : undefined;
+  // Issue #3: only the camera heading (device orientation) casts the
+  // bearing ray. photo.movementHeading is contextual and never used here.
+  const ch = photo.cameraHeading;
+  const hasHeading = ch != null;
+  const bearingDeg = hasHeading ? imageBearing(ch!.bearing, obs.bbox) : 0;
   const bearingUncDeg =
-    hasHeading && headingUnc != null
+    hasHeading && ch!.uncertaintyDeg != null
       ? // RSS of the heading quality uncertainty and the bbox-center
         // assumption (the object could be anywhere within the bbox width).
-        sqrt(headingUnc ** 2 + ((obs.bbox.w / 2) * NOMINAL_FOV_DEG) ** 2)
+        sqrt(ch!.uncertaintyDeg ** 2 + ((obs.bbox.w / 2) * NOMINAL_FOV_DEG) ** 2)
       : undefined;
 
   return {
@@ -684,6 +707,8 @@ export function rayFromPhoto(
     distanceM: obs.distanceEstimate ?? 0,
     gpsAccuracy: cam.accuracy,
     hasHeading,
+    headingSource: ch?.source,
+    headingAgeMs: ch?.ageMs,
     bearingUncDeg,
     distanceUncertaintyM: obs.distanceUncertaintyM,
     cameraAgeMs: cam.ageMs,

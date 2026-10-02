@@ -18,20 +18,56 @@ Each sample should include:
 - timestamp
 - reported accuracy
 - speed when available
-- heading when available
+- movement heading (direction of travel) when available
 
 Using a track rather than a single GPS sample makes it possible to reduce transient GPS jumps and interpolate the mapper's likely position at capture time.
 
+### Camera bearing vs movement bearing (issue #3)
+
+Two fundamentally different directions must never be mixed:
+
+- **Movement bearing** — the direction of travel (course over ground)
+  reported by the GPS track. It is contextual evidence only (e.g. a
+  person walking north can photograph anything around them) and must
+  NEVER be used as the direction the camera points.
+- **Camera bearing** — the direction the lens points at capture time,
+  derived ONLY from the device orientation via the single normalized
+  orientation path (`OrientationTracker` / `normalizeHeading`).
+
+The GPS track is recorded by the location tracker alone; the camera
+bearing comes exclusively from the orientation tracker. There is exactly
+one normalized orientation path — no second, ad-hoc deviceorientation
+listener may exist.
+
 ### Capture direction
 
-When device-orientation data is available, associate heading with the photo.
+The camera bearing is associated with the photo only when the
+orientation reading is FRESH relative to the true (EXIF) capture time:
 
-Heading should be treated as uncertain because magnetometer readings can be affected by:
+- readings older than the freshness window (~10 s) are rejected — a
+  person can rotate the phone 90° in a second;
+- readings taken AFTER the shutter (post-return readings, e.g. the
+  orientation captured after the file picker closes) are rejected
+  unconditionally;
+- relative (non-geographic) orientation and readings without a
+  timestamp are rejected — freshness cannot be verified;
+- every rejection is surfaced as an explicit, human-readable note in the
+  capture toast and the review UI; a photo without a camera bearing is
+  never silently treated as bearing-less.
+
+When accepted, the bearing carries its full provenance: source
+(compass / absolute-alpha / approximate), 1-sigma uncertainty, timestamp
+and age. This provenance travels with the ray into the position
+estimator, where the bearing is weighted by its uncertainty.
+
+Camera bearings should be treated as uncertain because magnetometer
+readings can be affected by:
 
 - device calibration
 - nearby metal
 - buildings
 - how the phone is held
+- the phone's orientation (landscape vs portrait, screen-rotation offset)
 
 ### Image-derived direction
 

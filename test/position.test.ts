@@ -10,8 +10,8 @@ import type { GpsSample, Photo } from '../src/types';
 
 type Sample = GpsSample;
 
-function sample(id: string, lat: number, lon: number, timestamp: number, heading?: number): Sample {
-  return { id, lat, lon, accuracy: 5, timestamp, heading };
+function sample(id: string, lat: number, lon: number, timestamp: number, movementHeading?: number): Sample {
+  return { id, lat, lon, accuracy: 5, timestamp, movementHeading };
 }
 
 describe('trackPositionAt (issue #6: time-based GPS association)', () => {
@@ -44,25 +44,25 @@ describe('trackPositionAt (issue #6: time-based GPS association)', () => {
     expect(trackPositionAt([a, b], 2000)?.id).toBe(b.id);
   });
 
-  it('interpolates heading around the 0/360 wrap (shortest arc)', () => {
+  it('interpolates the MOVEMENT heading around the 0/360 wrap (shortest arc)', () => {
     const n1 = sample('n1', 48.8, 2.3, 1000, 350);
     const n2 = sample('n2', 48.801, 2.301, 2000, 10);
     const p = trackPositionAt([n1, n2], 1500)!;
-    expect(p.heading).toBeCloseTo(0, 5); // 350 -> 10 midpoint is 0/360, not 180
+    expect(p.movementHeading).toBeCloseTo(0, 5); // 350 -> 10 midpoint is 0/360, not 180
   });
 
-  it('interpolates heading directly when no wrap is needed', () => {
+  it('interpolates the MOVEMENT heading directly when no wrap is needed', () => {
     const n1 = sample('n1', 48.8, 2.3, 1000, 90);
     const n2 = sample('n2', 48.801, 2.301, 2000, 180);
     const p = trackPositionAt([n1, n2], 1500)!;
-    expect(p.heading).toBeCloseTo(135, 5);
+    expect(p.movementHeading).toBeCloseTo(135, 5);
   });
 
-  it('uses the available heading when one sample lacks it', () => {
+  it('uses the available movement heading when one sample lacks it', () => {
     const n1 = sample('n1', 48.8, 2.3, 1000);
     const n2 = sample('n2', 48.801, 2.301, 2000, 120);
     const p = trackPositionAt([n1, n2], 1500)!;
-    expect(p.heading).toBe(120);
+    expect(p.movementHeading).toBe(120);
   });
 
   it('carries the worst accuracy of the bracketing samples', () => {
@@ -91,7 +91,7 @@ describe('trackPositionAt multi-sample bracketing (issue #6 remaining blocker)',
     const p = trackPositionAt(track, 2400)!;
     expect(p.lat).toBeCloseTo(48.8014, 9);
     expect(p.lon).toBeCloseTo(2.3014, 9);
-    expect(p.heading).toBeCloseTo(14, 5);
+    expect(p.movementHeading).toBeCloseTo(14, 5);
   });
 
   it('returns the original sample on an exact hit', () => {
@@ -114,7 +114,7 @@ describe('trackPositionAt multi-sample bracketing (issue #6 remaining blocker)',
     // 99% of the way from X to Y (a nearest-sample-first approach would pick
     // Y as nearest and risk the wrong interval).
     expect(p.lat).toBeCloseTo(48.8099, 6);
-    expect(p.heading).toBeCloseTo(9.9, 5);
+    expect(p.movementHeading).toBeCloseTo(9.9, 5);
   });
 });
 
@@ -273,6 +273,21 @@ describe('rayFromPhoto (issue #3)', () => {
     };
   }
 
+  /** Build camera-heading evidence (issue #3: the ONLY bearing source). */
+  function ch(
+    bearing: number,
+    source: 'compass' | 'absolute-alpha' | 'approximate',
+    uncertaintyDeg?: number
+  ) {
+    return {
+      bearing,
+      source,
+      uncertaintyDeg: uncertaintyDeg ?? (source === 'approximate' ? 20 : 5),
+      timestamp: 1_995_000,
+      ageMs: 5_000
+    } as const;
+  }
+
   const obs = {
     bbox: { x: 0.5, y: 0.4, w: 0.2, h: 0.25 },
     distanceEstimate: 10,
@@ -280,7 +295,7 @@ describe('rayFromPhoto (issue #3)', () => {
   };
 
   it('builds the ray from cameraPosition with full quality evidence', () => {
-    const photo = makePhoto({ heading: 90, headingSource: 'compass' });
+    const photo = makePhoto({ cameraHeading: ch(90, 'compass') });
     const r = rayFromPhoto(photo, obs)!;
     expect(r.lat).toBe(48.8);
     expect(r.lon).toBe(2.3);
@@ -297,10 +312,17 @@ describe('rayFromPhoto (issue #3)', () => {
     expect(r.bearingUncDeg).toBeCloseTo(Math.sqrt(25 + 6.2 ** 2), 5);
   });
 
-  it('propagates the heading source quality into bearing uncertainty', () => {
-    const compass = rayFromPhoto(makePhoto({ heading: 90, headingSource: 'compass' }), obs)!;
-    const approx = rayFromPhoto(makePhoto({ heading: 90, headingSource: 'approximate' }), obs)!;
+  it('propagates the camera-heading quality into bearing uncertainty', () => {
+    const compass = rayFromPhoto(makePhoto({ cameraHeading: ch(90, 'compass') }), obs)!;
+    const approx = rayFromPhoto(makePhoto({ cameraHeading: ch(90, 'approximate') }), obs)!;
     expect(approx.bearingUncDeg).toBeGreaterThan(compass.bearingUncDeg!);
+  });
+
+  it('carries the camera-heading provenance on the ray (issue #3)', () => {
+    const r = rayFromPhoto(makePhoto({ cameraHeading: ch(90, 'absolute-alpha') }), obs)!;
+    expect(r.hasHeading).toBe(true);
+    expect(r.headingSource).toBe('absolute-alpha');
+    expect(r.headingAgeMs).toBe(5_000);
   });
 
   it('marks rays without a heading as bearing-less', () => {
@@ -314,13 +336,18 @@ describe('rayFromPhoto (issue #3)', () => {
     const photo = makePhoto({
       cameraPosition: undefined,
       gps: { id: 'g1', lat: 48.9, lon: 2.4, accuracy: 8, timestamp: 2_000_000 },
-      heading: 90,
-      headingSource: 'track'
+      // Issue #3 acceptance: the MOVEMENT heading (direction of travel)
+      // must NOT be used as the camera bearing — even on a photo with no
+      // cameraPosition, the ray stays bearing-less.
+      movementHeading: 90
     });
     const r = rayFromPhoto(photo, obs)!;
     expect(r.lat).toBe(48.9);
     expect(r.lon).toBe(2.4);
     expect(r.gpsAccuracy).toBe(8);
+    expect(r.hasHeading).toBe(false);
+    expect(r.bearingDeg).toBe(0);
+    expect(r.headingSource).toBeUndefined();
   });
 
   it('returns null when the photo has no position at all', () => {

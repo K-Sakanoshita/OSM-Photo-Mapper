@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   HEADING_UNCERTAINTY_DEG,
+  associateCameraHeading,
   headingUncertaintyDeg,
   normalizeHeading,
+  ORIENT_FRESH_MS,
+  type HeadingReading,
   type OrientationLike
 } from '../src/capture/orientation';
 
@@ -87,7 +90,151 @@ describe('headingUncertaintyDeg (issue #3 blocker 3: quality-weighted bearing ev
     expect(headingUncertaintyDeg(undefined)).toBeUndefined();
   });
 
-  it('gives the GPS track a defined moderate uncertainty', () => {
-    expect(headingUncertaintyDeg('track')).toBe(10);
+  it('never assigns a camera-heading uncertainty to the movement heading (issue #3)', () => {
+    // 'track' is no longer a heading quality: the GPS-track (movement)
+    // heading is a distinct evidence and must not carry camera-heading
+    // uncertainty weights.
+    expect(HEADING_UNCERTAINTY_DEG['track']).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* associateCameraHeading (issue #3: freshness + provenance gate)      */
+/* ------------------------------------------------------------------ */
+
+describe('associateCameraHeading (issue #3: stale / post-return readings are rejected)', () => {
+  const CAPTURE = 1_000_000;
+
+  function reading(partial: Partial<HeadingReading> & { heading: number }): HeadingReading {
+    return {
+      quality: 'compass',
+      detail: 'Compass heading',
+      ...partial
+    };
+  }
+
+  it('accepts a fresh reading and records full provenance', () => {
+    const { cameraHeading } = associateCameraHeading(
+      reading({ heading: 270, quality: 'compass', timestamp: CAPTURE - 2000 }),
+      CAPTURE
+    );
+    expect(cameraHeading).toEqual({
+      bearing: 270,
+      source: 'compass',
+      uncertaintyDeg: 5,
+      timestamp: CAPTURE - 2000,
+      ageMs: 2000,
+      detail: 'Compass heading'
+    });
+  });
+
+  it('accepts a reading taken at the exact capture time (age 0)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 90, quality: 'absolute-alpha', timestamp: CAPTURE }),
+      CAPTURE
+    );
+    expect(headingNote).toBeUndefined();
+    expect(cameraHeading?.source).toBe('absolute-alpha');
+    expect(cameraHeading?.ageMs).toBe(0);
+    expect(cameraHeading?.uncertaintyDeg).toBe(5);
+  });
+
+  it('rejects a STALE reading (older than the freshness window) with an explicit note', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 270, timestamp: CAPTURE - (ORIENT_FRESH_MS + 1) }),
+      CAPTURE
+    );
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toContain('stale');
+    expect(headingNote).toContain(`${Math.round((ORIENT_FRESH_MS + 1) / 1000)} s`);
+  });
+
+  it('accepts a reading exactly at the freshness boundary (age == window)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 270, timestamp: CAPTURE - ORIENT_FRESH_MS }),
+      CAPTURE
+    );
+    expect(headingNote).toBeUndefined();
+    expect(cameraHeading?.ageMs).toBe(ORIENT_FRESH_MS);
+  });
+
+  it('rejects a POST-RETURN reading (timestamp after the shutter) unconditionally', () => {
+    // Even a 1 ms post-return reading must be rejected — the shutter
+    // already fired; the reading describes a different moment.
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 270, timestamp: CAPTURE + 1 }),
+      CAPTURE
+    );
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toContain('postdates');
+  });
+
+  it('rejects a reading WITHOUT a timestamp (freshness unverifiable)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      { heading: 270, quality: 'compass', detail: 'Compass heading' },
+      CAPTURE
+    );
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toContain('no timestamp');
+  });
+
+  it('rejects relative-only readings (no geographic heading)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      { heading: undefined, quality: 'relative', detail: 'Relative alpha; no screen orientation' },
+      CAPTURE
+    );
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toContain('No geographic heading');
+  });
+
+  it('rejects none-quality readings with the sensor detail', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      { heading: undefined, quality: 'none', detail: 'Orientation permission denied' },
+      CAPTURE
+    );
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toContain('Orientation permission denied');
+  });
+
+  it('handles a missing reading (tracker never started)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(null, CAPTURE);
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toBe('No orientation reading');
+  });
+
+  it('maps an approximate-quality reading to the approximate source', () => {
+    const { cameraHeading } = associateCameraHeading(
+      reading({ heading: 10, quality: 'approximate', detail: 'Approximate from absolute alpha + tilt', timestamp: CAPTURE - 100 }),
+      CAPTURE
+    );
+    expect(cameraHeading?.source).toBe('approximate');
+    expect(cameraHeading?.uncertaintyDeg).toBe(20);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Sideways-photography acceptance (issue #3)                          */
+/* ------------------------------------------------------------------ */
+
+describe('sideways photography: movement heading must never become the camera bearing (issue #3)', () => {
+  it('uses ONLY the orientation reading as camera bearing when the track says otherwise', () => {
+    // Track (movement) says the user is walking north (heading 0);
+    // the device orientation (camera) says the lens points east (90).
+    // The camera bearing MUST be 90 — the movement heading is ignored.
+    const { cameraHeading } = associateCameraHeading(
+      { heading: 90, quality: 'compass', detail: 'Compass heading', timestamp: Date.now() - 1000 },
+      Date.now()
+    );
+    expect(cameraHeading?.bearing).toBe(90);
+  });
+
+  it('produces NO camera bearing when only a movement heading exists (no orientation reading)', () => {
+    // A walking user with no orientation sensor data: the GPS track has a
+    // movement heading, but that must not masquerade as a camera bearing.
+    // associateCameraHeading never sees the track — with no reading the
+    // result is an explicit note, not a bearing.
+    const { cameraHeading, headingNote } = associateCameraHeading(null, Date.now());
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toBe('No orientation reading');
   });
 });

@@ -18,7 +18,7 @@ The application requests the permissions it needs and begins recording:
 - reported GPS accuracy
 - timestamp
 - movement track
-- heading when available
+- movement heading (direction of travel) when available
 
 ### 2. Capture photos
 
@@ -30,7 +30,8 @@ For each photo, store:
 - capture timestamp
 - nearest GPS samples
 - GPS accuracy
-- heading / orientation when available
+- camera bearing (device orientation, with freshness + provenance) when available
+- movement heading (direction of travel) when available
 - survey session ID
 
 ### 3. Map photos

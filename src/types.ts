@@ -21,8 +21,11 @@ export interface GpsSample {
   timestamp: number;
   /** Ground speed, m/s (when available). */
   speed?: number;
-  /** Device heading, degrees from true/magnetic north (when available). */
-  heading?: number;
+  /** Direction of travel (course over ground), degrees from north, when
+   *  the location provider reports it. This is a MOVEMENT bearing, not
+   *  a camera bearing (issue #3) — the two are distinct evidence and
+   *  must never be conflated. */
+  movementHeading?: number;
 }
 
 /** Where a photo's capture timestamp came from (quality marker). */
@@ -55,6 +58,35 @@ export interface CameraPosition {
   inSpan?: boolean;
 }
 
+/** Quality markers that can serve as camera-bearing evidence (issue #3).
+ *  'relative' and 'none' never do — they are not geographic bearings. */
+export type CameraHeadingSource = 'compass' | 'absolute-alpha' | 'approximate';
+
+/**
+ * Camera bearing at capture, with full quality/provenance evidence
+ * (issue #3). The bearing came from the normalized OrientationTracker
+ * reading associated with the capture; the fields let the estimator
+ * weight it and let the reviewer judge it:
+ *  - source: which normalized orientation path produced it;
+ *  - uncertaintyDeg: 1-sigma bearing uncertainty for that source;
+ *  - timestamp/ageMs: when the reading was taken and how stale it was
+ *    relative to the shutter.
+ */
+export interface CameraHeading {
+  /** Geographic bearing the camera was pointing, degrees clockwise from
+   *  north. */
+  bearing: number;
+  source: CameraHeadingSource;
+  /** 1-sigma bearing uncertainty in degrees for `source`. */
+  uncertaintyDeg: number;
+  /** Epoch ms when the orientation reading was taken. */
+  timestamp: number;
+  /** Capture time − reading time (ms). */
+  ageMs: number;
+  /** Human-readable provenance detail from the reading. */
+  detail?: string;
+}
+
 /**
  * A captured photo associated with its camera position.
  * Issue #6: timestamp is the capture time from EXIF/file metadata, and the
@@ -79,15 +111,20 @@ export interface Photo {
   cameraPosition?: CameraPosition;
   /** Compatibility alias of `cameraPosition` (old shape) for consumers. */
   gps?: GpsSample;
-  /** Camera heading at capture, degrees (when available). */
-  heading?: number;
-  /** Where the capture heading came from, with orientation quality
-   *  (issue #3 blocker 1): 'track' (heading interpolated from the GPS
-   *  track at capture time) or a device-orientation quality marker from
-   *  the OrientationTracker ('compass' / 'absolute-alpha' /
-   *  'approximate' — the weaker fallback used only when the track has no
-   *  heading). The marker drives the estimator's bearing uncertainty. */
-  headingSource?: 'track' | 'compass' | 'absolute-alpha' | 'approximate';
+  /** Camera bearing at capture, WITH quality evidence (issue #3): the
+   *  normalized device-orientation reading associated with the capture.
+   *  It is NEVER derived from the movement/travel heading. Absent when
+   *  no fresh geographic orientation reading exists — the estimator then
+   *  falls back to GPS-only evidence for this photo. */
+  cameraHeading?: CameraHeading;
+  /** Movement bearing (direction of travel) at capture time, from the
+   *  GPS track. Weak contextual evidence only — it is NEVER used as the
+   *  camera bearing (issue #3). */
+  movementHeading?: number;
+  /** Why no camera bearing is available, when none is (issue #3) — e.g.
+   *  a stale or post-return orientation reading was rejected. Surfaced
+   *  in the review UI so the gap is an explicit, visible fact. */
+  headingNote?: string;
   /** Free-form field note. */
   note?: string;
 }

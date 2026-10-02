@@ -313,6 +313,12 @@ class App {
     this.survey = survey;
     this.tracker = null;
     this.mode = 'survey';
+    // Issue #3: request orientation access at survey start (this is a
+    // user gesture, satisfying the iOS requirement) so the
+    // OrientationTracker — the single normalized orientation path — is
+    // live BEFORE the first photo, not only when the photo button is
+    // pressed. Idempotent; the photo button calls it again.
+    this.orientationTracker.start();
     this.render();
   }
 
@@ -325,6 +331,10 @@ class App {
       survey.recording = false;
       void surveyDb.saveSurveyMeta(survey);
     }
+    // Issue #3: ensure the normalized orientation path is live when the
+    // survey opens (user gesture; idempotent), so camera headings are
+    // available from the very first capture.
+    this.orientationTracker.start();
     this.mode = 'survey';
     this.render();
   }
@@ -534,7 +544,18 @@ class App {
       const camNote = photo.cameraPosition
         ? ` · cam: ${describeCameraPosition(photo.cameraPosition)}`
         : ' · no GPS — needs manual positioning';
-      toast(`Photo captured (${s.photos.length})${srcNote}${camNote}`);
+      // Issue #3: state the camera-bearing outcome EXPLICITLY — the
+      // bearing with its provenance, or the reason it is missing
+      // (stale / post-return / no sensor). A silent gap would hide the
+      // evidence loss.
+      let hdgNote = '';
+      if (photo.cameraHeading) {
+        const ch = photo.cameraHeading;
+        hdgNote = ` · cam hdg ${ch.bearing.toFixed(0)}° (${ch.source}, ±${ch.uncertaintyDeg}°, age ${Math.round(ch.ageMs / 1000)} s)`;
+      } else {
+        hdgNote = ` · no camera heading${photo.headingNote ? `: ${photo.headingNote}` : ''}`;
+      }
+      toast(`Photo captured (${s.photos.length})${srcNote}${camNote}${hdgNote}`);
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
       if (mapBtn) mapBtn.disabled = false;
     } catch (e) {
@@ -806,6 +827,46 @@ class App {
           : ' no GPS — position needs manual placement.'
       )
     );
+
+    // Issue #3: camera-bearing evidence. Show the bearing WITH its
+    // provenance (source, uncertainty, age), or an explicit, visible
+    // reason why no camera bearing is available (stale or post-return
+    // reading, no sensor, relative-only orientation). The movement
+    // heading (direction of travel) is shown separately and labeled as
+    // NOT a camera bearing.
+    const hdgPhoto = c.observationIds
+      .map((id) => photoByObs.get(id))
+      .find((p) => p != null && (p.cameraHeading != null || p.headingNote != null));
+    if (hdgPhoto?.cameraHeading) {
+      const ch = hdgPhoto.cameraHeading;
+      card.append(
+        el(
+          'div',
+          { class: 'row heading-row' },
+          el('b', {}, 'Cam heading'),
+          ` ${ch.bearing.toFixed(0)}° · ${ch.source} · ±${ch.uncertaintyDeg}° · age ${Math.round(ch.ageMs / 1000)} s${ch.detail ? ` · ${ch.detail}` : ''}`
+        )
+      );
+    } else if (hdgPhoto?.headingNote) {
+      card.append(
+        el(
+          'div',
+          { class: 'row heading-row heading-missing' },
+          el('b', {}, 'Cam heading'),
+          ` none — ${hdgPhoto.headingNote}`
+        )
+      );
+    }
+    if (hdgPhoto?.movementHeading != null) {
+      card.append(
+        el(
+          'div',
+          { class: 'row heading-row movement-row' },
+          el('b', {}, 'Movement'),
+          ` hdg ${hdgPhoto.movementHeading.toFixed(0)}° (direction of travel — NOT a camera bearing)`
+        )
+      );
+    }
 
     // Issue #8: position solution provenance (estimate → refined → snapped).
     const ps = c.positionSolution;

@@ -53,8 +53,10 @@ export interface TrackCameraPosition extends CameraPosition {
   /** True when the capture time lies inside the recorded track span
    *  (genuine bracketing coverage, as opposed to an endpoint fallback). */
   inSpan: boolean;
-  /** Heading from the track at the capture time (when available). */
-  heading?: number;
+  /** Direction of travel (course over ground) from the track at the
+   *  capture time (when available). MOVEMENT bearing — contextual
+   *  evidence only, never a camera bearing (issue #3). */
+  movementHeading?: number;
 }
 
 /**
@@ -89,7 +91,7 @@ export function trackCameraPosition(
     source: 'track',
     interpolated,
     inSpan: captureTimestamp >= first.timestamp && captureTimestamp <= last.timestamp,
-    heading: pos.heading
+    movementHeading: pos.movementHeading
   };
 }
 

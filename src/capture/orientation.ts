@@ -24,7 +24,14 @@
  *
  * The quality marker feeds the position estimator's bearing-uncertainty
  * weighting (see `headingUncertaintyDeg`).
+ *
+ * Issue #3 (camera vs movement bearing): this module is the ONLY source
+ * of the CAMERA bearing. The GPS track's heading is the MOVEMENT bearing
+ * (direction of travel) and is a separate, contextual evidence — it is
+ * never normalized here and never used as a camera heading.
  */
+
+import type { CameraHeading, CameraHeadingSource } from '../types';
 
 /** Quality of a geographic heading reading. */
 export type HeadingQuality =
@@ -42,6 +49,10 @@ export interface HeadingReading {
   quality: HeadingQuality;
   /** Short human-readable description for evidence display. */
   detail: string;
+  /** Epoch ms when the reading was taken. The live tracker always sets
+   *  it; without it, freshness relative to the shutter cannot be verified
+   *  and the reading is NOT usable as camera bearing (issue #3). */
+  timestamp?: number;
 }
 
 /** The fields of a DeviceOrientationEvent this module needs. */
@@ -54,18 +65,15 @@ export interface OrientationLike {
   webkitCompass?: number | null;
 }
 
-/** Bearing uncertainty (degrees) by heading quality, used to weight
- *  orientation evidence in the position estimator (issue #3 blocker 3).
- * 'track' = heading derived from the GPS track (movement or the
- * orientation fallback recorded in the tracker). Unknown sources use
- * the conservative DEFAULT. */
-export const HEADING_UNCERTAINTY_DEG: Record<HeadingQuality | 'track', number> = {
+/** 1-sigma bearing uncertainty (degrees) by heading quality, used to
+ *  weight orientation evidence in the position estimator (issue #3).
+ *  Covers ONLY the quality markers that yield a geographic bearing:
+ *  'track' is gone — the GPS-track (movement) heading is distinct
+ *  evidence and never masquerades as a camera heading. */
+export const HEADING_UNCERTAINTY_DEG: Record<CameraHeadingSource, number> = {
   compass: 5,
   'absolute-alpha': 5,
   approximate: 20,
-  track: 10,
-  relative: 10,
-  none: 10,
 };
 
 export const DEFAULT_HEADING_UNCERTAINTY_DEG = 10;
@@ -128,11 +136,85 @@ export function normalizeHeading(
  * ray for that observation.
  */
 export function headingUncertaintyDeg(
-  quality: HeadingQuality | 'track' | undefined
+  quality: HeadingQuality | undefined
 ): number | undefined {
   if (quality == null || quality === 'relative' || quality === 'none')
     return undefined;
-  return HEADING_UNCERTAINTY_DEG[quality];
+  if (quality in HEADING_UNCERTAINTY_DEG)
+    return HEADING_UNCERTAINTY_DEG[quality as CameraHeadingSource];
+  return DEFAULT_HEADING_UNCERTAINTY_DEG;
+}
+
+/**
+ * Maximum age (ms) of an orientation reading, relative to the CAPTURE
+ * timestamp, for it to be usable as the photo's camera bearing (issue
+ * #3). A person can rotate the phone ~90° in a second; a reading from
+ * several seconds before the shutter no longer describes the direction
+ * the camera was pointing at capture time.
+ */
+export const ORIENT_FRESH_MS = 10_000;
+
+/**
+ * Associate a (possibly stale or post-return) orientation reading with a
+ * capture, producing the photo's camera-bearing evidence — or an explicit
+ * human-readable reason why the reading is NOT used (issue #3).
+ *
+ * The camera bearing comes ONLY from the device orientation. The movement
+ * heading (direction of travel) is never an input here.
+ *
+ * Rejection rules (each yields a `headingNote`, never a bearing):
+ *  - no reading, or no geographic heading (relative/none): no sensor data;
+ *  - reading lacks a timestamp: freshness cannot be verified;
+ *  - reading postdates the capture (post-return reading): the shutter
+ *    already fired — the reading describes a different moment;
+ *  - reading older than ORIENT_FRESH_MS: stale.
+ * When accepted, the result carries source, uncertainty, timestamp and
+ * age so the estimator and the reviewer can see the full provenance.
+ */
+export function associateCameraHeading(
+  reading: HeadingReading | null | undefined,
+  captureTimestamp: number
+): { cameraHeading?: CameraHeading; headingNote?: string } {
+  if (!reading || reading.heading == null) {
+    return {
+      headingNote: reading
+        ? `No geographic heading (${reading.detail})`
+        : 'No orientation reading'
+    };
+  }
+  if (reading.timestamp == null) {
+    return {
+      headingNote:
+        'Orientation reading has no timestamp — freshness unverifiable, not used'
+    };
+  }
+  if (reading.timestamp > captureTimestamp) {
+    return {
+      headingNote: `Orientation reading postdates capture by ${Math.round(reading.timestamp - captureTimestamp)} ms — post-return reading rejected`
+    };
+  }
+  const ageMs = captureTimestamp - reading.timestamp;
+  if (ageMs > ORIENT_FRESH_MS) {
+    return {
+      headingNote: `Orientation reading stale (${Math.round(ageMs / 1000)} s before capture) — not used as camera bearing`
+    };
+  }
+  const source: CameraHeadingSource =
+    reading.quality === 'compass' ||
+    reading.quality === 'absolute-alpha' ||
+    reading.quality === 'approximate'
+      ? reading.quality
+      : 'approximate'; // defensive: heading present with an unexpected quality
+  return {
+    cameraHeading: {
+      bearing: reading.heading,
+      source,
+      uncertaintyDeg: headingUncertaintyDeg(source) ?? DEFAULT_HEADING_UNCERTAINTY_DEG,
+      timestamp: reading.timestamp,
+      ageMs,
+      detail: reading.detail
+    }
+  };
 }
 
 function finite(v: number | null | undefined): number | undefined {
@@ -169,7 +251,12 @@ export class OrientationTracker {
           typeof screen !== 'undefined' && screen.orientation?.angle != null
             ? screen.orientation.angle
             : 0;
-        this.latest = normalizeHeading(e as unknown as OrientationLike, screenAngle);
+        // Issue #3: every reading is timestamped so the capture pipeline
+        // can check freshness relative to the shutter.
+        this.latest = {
+          ...normalizeHeading(e as unknown as OrientationLike, screenAngle),
+          timestamp: Date.now()
+        };
       };
       window.addEventListener('deviceorientation', this.listener);
     };
@@ -199,7 +286,10 @@ export class OrientationTracker {
     }
   }
 
-  /** Synchronous snapshot of the most recent normalized reading. */
+  /** Synchronous snapshot of the most recent normalized reading. The
+   *  timestamp reflects WHEN the reading was taken — callers must check
+   *  freshness before using it as a capture-time camera bearing (see
+   *  `associateCameraHeading`). */
   read(): HeadingReading {
     return this.latest;
   }

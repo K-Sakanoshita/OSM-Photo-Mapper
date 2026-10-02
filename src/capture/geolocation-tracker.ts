@@ -2,18 +2,22 @@ import type { GpsSample } from '../types';
 import { surveyDb } from '../db/survey-db';
 
 /**
- * Continuous GPS + heading recorder for a survey session.
+ * Continuous GPS recorder for a survey session (the movement track).
  *
- * Uses the Geolocation API (watchPosition) for the movement track and the
- * DeviceOrientationEvent API for heading when the device/browser supports it.
- * Every sample is persisted immediately so a crash loses at most the in-flight
- * second.
+ * Uses the Geolocation API (watchPosition). Every sample is persisted
+ * immediately so a crash loses at most the in-flight second.
+ *
+ * Issue #3 (camera vs movement bearing): this tracker is the ONLY source
+ * of the MOVEMENT track. It does NOT listen to `deviceorientation` — the
+ * camera bearing comes exclusively from the OrientationTracker
+ * (src/capture/orientation.ts), the single normalized orientation path.
+ * The `movementHeading` on a sample is the direction of travel (course
+ * over ground) reported by the location provider: contextual evidence
+ * only, never a camera heading.
  */
 export class GeolocationTracker {
   private watchId: number | null = null;
   private samples: GpsSample[] = [];
-  private headingListener: ((e: DeviceOrientationEvent) => void) | null = null;
-  private lastHeading: number | undefined;
 
   constructor(
     private readonly surveyId: string,
@@ -23,7 +27,6 @@ export class GeolocationTracker {
   /** Begin continuous recording. Resolves once the first fix arrives. */
   async start(): Promise<void> {
     if (this.watchId != null) return;
-    this.startHeading();
 
     await new Promise<void>((resolve, reject) => {
       const opts: PositionOptions = { enableHighAccuracy: true, maximumAge: 1500, timeout: 20000 };
@@ -36,7 +39,10 @@ export class GeolocationTracker {
             accuracy: pos.coords.accuracy,
             timestamp: pos.timestamp,
             speed: pos.coords.speed ?? undefined,
-            heading: pos.coords.heading ?? this.lastHeading
+            // Direction of travel (course over ground) — MOVEMENT bearing,
+            // not camera bearing (issue #3). No orientation fallback: the
+            // two are distinct evidence and must never be conflated.
+            movementHeading: pos.coords.heading ?? undefined
           };
           void this.persist(sample);
           resolve();
@@ -55,10 +61,6 @@ export class GeolocationTracker {
       navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
     }
-    if (this.headingListener) {
-      window.removeEventListener('deviceorientation', this.headingListener);
-      this.headingListener = null;
-    }
   }
 
   get isRecording(): boolean {
@@ -67,10 +69,6 @@ export class GeolocationTracker {
 
   get recordedSamples(): GpsSample[] {
     return this.samples;
-  }
-
-  get currentHeading(): number | undefined {
-    return this.lastHeading;
   }
 
   /** Most recent sample (or the one nearest a timestamp). */
@@ -93,34 +91,5 @@ export class GeolocationTracker {
     this.samples.push(sample);
     this.onSample?.(sample);
     await surveyDb.addGpsSample(this.surveyId, sample);
-  }
-
-  private startHeading(): void {
-    const DOE = DeviceOrientationEvent as unknown as {
-      requestPermission?: () => Promise<string>;
-    };
-    const attach = () => {
-      this.headingListener = (e: DeviceOrientationEvent) => {
-        // Absolute heading when available; fall back to webkitCompass.
-        const h = e.absolute ? e.alpha : (e as unknown as { webkitCompass?: number }).webkitCompass;
-        if (typeof h === 'number' && !Number.isNaN(h)) {
-          // device alpha is clockwise-from-north already on most platforms.
-          this.lastHeading = h;
-        }
-      };
-      window.addEventListener('deviceorientation', this.headingListener);
-    };
-
-    if (typeof DOE.requestPermission === 'function') {
-      // iOS: permission must be requested from a user gesture.
-      DOE.requestPermission().then(
-        (res) => {
-          if (res === 'granted') attach();
-        },
-        () => void 0
-      );
-    } else if ('ondeviceorientation' in window) {
-      attach();
-    }
   }
 }

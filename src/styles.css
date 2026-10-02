@@ -462,6 +462,10 @@ body[data-mode='upload'] #content { display: block; }
 
 /* ---------- Issue #9: review-only classes, mapping picker, geometry policy ---------- */
 .cam-row { color: var(--muted); font-size: 0.82em; }
+/* issue #3: camera-bearing evidence (or its explicit absence). */
+.heading-row { color: var(--muted); font-size: 0.82em; margin-top: 4px; }
+.heading-row.heading-missing { color: #8a6d1a; }
+.heading-row.movement-row { color: var(--muted); font-style: italic; }
 .review-only-note {
   margin-top: 8px;
   font-size: 12px;

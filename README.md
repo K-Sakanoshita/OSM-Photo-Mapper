@@ -5,7 +5,7 @@ OSM Photo Mapper is a photo-assisted field mapping tool for OpenStreetMap.
 The intended workflow is simple:
 
 1. Walk around and take photos continuously.
-2. Record GPS, timestamp, heading, and other available sensor data with each photo.
+2. Record GPS, timestamp, camera bearing (orientation), and other available sensor data with each photo.
 3. Press **Map photos** after the survey.
 4. Analyze the photos to detect map features and suggest OSM tags.
 5. Estimate each feature's position from GPS, camera direction, estimated distance, surrounding photos, and nearby OSM data.
@@ -29,7 +29,8 @@ Photo capture
   |
   +-- GPS / accuracy
   +-- timestamp
-  +-- heading
+  +-- camera bearing (orientation)
+  +-- movement heading (direction of travel)
   +-- optional movement track
   |
   v

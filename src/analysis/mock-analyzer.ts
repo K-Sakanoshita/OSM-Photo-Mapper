@@ -75,8 +75,11 @@ export class MockAnalyzer implements FeatureAnalyzer {
   private projectPoint(survey: Survey, obs: Observation): { lat: number; lon: number } | null {
     const photo = survey.photos.find((p) => p.id === obs.photoId);
     if (!photo?.gps) return null;
-    const hasHeading = photo.heading != null;
-    const bearing = hasHeading ? imageBearing(photo.heading!, obs.bbox) : 0;
+    // Issue #3: only the camera heading (device orientation) projects the
+    // ray; the movement heading is never used.
+    const ch = photo.cameraHeading;
+    const hasHeading = ch != null;
+    const bearing = hasHeading ? imageBearing(ch!.bearing, obs.bbox) : 0;
     if (!hasHeading || (obs.distanceEstimate ?? 0) <= 0) {
       return { lat: photo.gps.lat, lon: photo.gps.lon };
     }
