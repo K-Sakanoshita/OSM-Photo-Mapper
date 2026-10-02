@@ -151,12 +151,25 @@ export interface Observation {
   /** Uncertainty of the distance estimate, meters (issue #3 blocker 3).
    *  When absent the estimator assumes a conservative default. */
   distanceUncertaintyM?: number;
-  /** Text visible in/around the object, if useful. */
+  /** Text visible in/around the object, if useful. Untrusted OCR
+   *  evidence (issue #2): shown to the reviewer, never auto name=*. */
   textSeen?: string;
+  /** Confidence in the OCR reading, 0..1. */
+  ocrConfidence?: number;
   /** Suggested OSM tag key/value pairs. */
   tagSuggestions: Record<string, string>;
   /** 0..1 confidence in the detection/tags. */
   tagConfidence: number;
+  /** 0..1 confidence in the detection itself (issue #2 provenance). */
+  detectionConfidence?: number;
+  /** Detected visual attributes that the class policy does NOT allow to
+   *  be applied automatically (review-only classes, keys outside the
+   *  class's declared tag policy). Carried as unconfirmed evidence for
+   *  the review UI (issue #2: low-confidence attributes remain unset). */
+  detectedAttributes?: Record<string, string>;
+  /** Optional visual identity evidence from the provider, used for
+   *  cross-photo same-object grouping (issue #2). */
+  identityEvidence?: string;
 }
 
 /**
@@ -300,8 +313,23 @@ export interface Survey extends SurveyMeta {
   candidates: FeatureCandidate[];
 }
 
+/** Per-photo analysis outcome (issue #2: partial batch failure is
+ *  visible and retryable instead of aborting the whole survey). */
+export interface PhotoAnalysisStatus {
+  photoId: string;
+  status: 'ok' | 'error';
+  /** Number of VALIDATED observations produced (status 'ok'). */
+  observationCount?: number;
+  /** Human-readable provider/API error (status 'error'). */
+  error?: string;
+}
+
 /** The result of running the analysis pipeline on a survey. */
 export interface AnalysisResult {
   observations: Observation[];
   candidates: FeatureCandidate[];
+  /** Per-photo outcomes (issue #2 batch progress/retry). */
+  photoStatuses?: PhotoAnalysisStatus[];
+  /** Provider that produced the observations (diagnostics). */
+  analyzerName?: string;
 }

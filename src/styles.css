@@ -518,3 +518,67 @@ body[data-mode='upload'] #content { display: block; }
   border-radius: 8px;
   padding: 6px 8px;
 }
+
+/* Issue #2: batch analysis screen (BYOK analyzer choice + progress). */
+.analysis-screen { display: block; }
+.analyzer-panel {
+  background: #f2f6fa;
+  border: 1px solid #d7e3ee;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  display: none; /* shown only when the OpenAI radio is checked */
+}
+.analysis-screen[data-analyzer='openai'] .analyzer-panel { display: block; }
+.analyzer-panel .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.analyzer-panel .field label { font-size: 12px; color: var(--muted); }
+.analyzer-panel .hint {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-top: 6px;
+}
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  padding: 6px 10px;
+  border: 1px solid #d7e3ee;
+  border-radius: 8px;
+  margin-top: 8px;
+  cursor: pointer;
+  background: #fff;
+}
+.radio-row:has(input:checked) {
+  border-color: var(--primary-dark);
+  background: #eaf2f8;
+  color: var(--primary-dark);
+}
+.persist-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 8px; cursor: pointer; }
+.analysis-progress { margin-top: 14px; }
+.analysis-progress .progress-line { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.analysis-status { font-size: 12px; line-height: 1.7; }
+.analysis-status.ok { color: #2e6b34; }
+.analysis-status.error { color: var(--danger); }
+.analysis-result { margin-top: 12px; }
+.analysis-summary { font-size: 13px; margin-bottom: 8px; }
+.retry-btn { margin-top: 8px; }
+
+/* Issue #2: unconfirmed detected attributes on the review card —
+   evidence only, never applied as OSM tags automatically. */
+.detected-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tag-chip.detected {
+  background: #f4f4f4;
+  color: var(--muted);
+  border: 1px dashed #c4c4c4;
+  padding: 4px 10px;
+}

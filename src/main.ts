@@ -16,6 +16,9 @@ import {
 } from './capture/camera-position';
 import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
+import { SurveyAnalysisPipeline } from './analysis/pipeline';
+import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
+import type { ImageObservationAnalyzer } from './analysis/analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
 import { buildOsmChange } from './osm/osmchange';
 import { validateCandidateExport } from './analysis/export-validation';
@@ -41,7 +44,9 @@ import type {
   Observation,
   OsmMatch,
   PositionSolution,
-  Survey
+  Survey,
+  AnalysisResult,
+  PhotoAnalysisStatus
 } from './types';
 
 /* ------------------------------------------------------------------ */
@@ -103,7 +108,11 @@ function confSpan(kind: string, value: number): HTMLElement {
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
-type Mode = 'list' | 'survey' | 'review' | 'upload';
+type Mode = 'list' | 'survey' | 'analysis' | 'review' | 'upload';
+
+/** BYOK OpenAI key storage slot (issue #2) — used ONLY on explicit user
+ *  opt-in; the key is kept in memory by default. */
+const OPENAI_KEY_STORAGE_KEY = 'osm-pm:openai-key';
 
 class App {
   private mapView: MapView;
@@ -128,6 +137,20 @@ class App {
   private gpsPollTimer: number | undefined;
   private gpsTickTimer: number | undefined;
   private analyzing = false;
+
+  /** Issue #2: batch analysis state.
+   *  analyzerKind: which ImageObservationAnalyzer runs the batch.
+   *  openaiKey: BYOK — kept in memory UNLESS the user explicitly opts in
+   *  to device persistence (openaiKeyPersist).
+   *  analysisStatuses/analysisProgress: live batch progress + per-photo
+   *  errors (partial failure is visible and retryable). */
+  private analyzerKind: 'mock' | 'openai' = 'mock';
+  private openaiKey = '';
+  private openaiKeyPersist = false;
+  private openaiModel = '';
+  private analysisStatuses: PhotoAnalysisStatus[] = [];
+  private analysisProgress = '';
+  private analysisResult: AnalysisResult | null = null;
 
   constructor() {
     const app = document.getElementById('app');
@@ -211,6 +234,9 @@ class App {
       case 'survey':
         this.renderSurveyScreen();
         break;
+      case 'analysis':
+        this.renderAnalysisScreen();
+        break;
       case 'review':
         void this.renderReviewScreen();
         break;
@@ -227,8 +253,12 @@ class App {
         this.mode = 'list';
         this.render();
         break;
-      case 'review':
+      case 'analysis':
         this.mode = 'survey';
+        this.render();
+        break;
+      case 'review':
+        this.mode = 'analysis';
         this.render();
         break;
       case 'upload':
@@ -404,7 +434,12 @@ class App {
         id: 'map-btn',
         class: 'btn primary',
         disabled: s.photos.length === 0,
-        onclick: () => void this.runAnalysis()
+        // Issue #2: go to the analysis screen (analyzer selection, BYOK
+        // config, batch progress/retry) BEFORE any analysis runs.
+        onclick: () => {
+          this.mode = 'analysis';
+          this.render();
+        }
       },
       'Map photos'
     );
@@ -563,45 +598,147 @@ class App {
     }
   }
 
-  /* ---------------- analysis ---------------- */
+  /* ---------------- analysis (issue #2) ---------------- */
 
-  private async runAnalysis(): Promise<void> {
+  /** Build the configured analyzer (issue #2). Returns null (with a
+   *  toast) when misconfigured — the batch does not start. */
+  private createAnalyzer(): ImageObservationAnalyzer | null {
+    if (this.analyzerKind === 'openai') {
+      const key = this.openaiKey.trim();
+      if (!key) {
+        toast('Enter your OpenAI API key (BYOK) to use the OpenAI analyzer');
+        return null;
+      }
+      return new OpenAIVisionAnalyzer({
+        apiKey: key,
+        ...(this.openaiModel.trim() ? { model: this.openaiModel.trim() } : {})
+      });
+    }
+    return new MockAnalyzer();
+  }
+
+  /** BYOK key storage policy (issue #2): in-memory by default;
+   *  localStorage only when the user explicitly opted in. */
+  private applyKeyStorage(): void {
+    try {
+      if (this.analyzerKind === 'openai') {
+        const key = this.openaiKey.trim();
+        if (this.openaiKeyPersist && key) localStorage.setItem(OPENAI_KEY_STORAGE_KEY, key);
+        else localStorage.removeItem(OPENAI_KEY_STORAGE_KEY);
+      }
+    } catch {
+      // Storage unavailable (private browsing): the key stays in memory.
+    }
+  }
+
+  /** Run the shared pipeline over the batch (issue #2). Per-photo
+   *  failures are recorded, never fatal; `photoIds` re-runs ONLY the
+   *  failed photos and merges with the previously saved observations. */
+  private async runAnalysis(photoIds?: string[]): Promise<void> {
     const s = this.survey;
     if (!s || this.analyzing) return;
-    this.analyzing = true;
-    toast('Analyzing photos…');
+    const analyzer = this.createAnalyzer();
+    if (!analyzer) return;
+    this.applyKeyStorage();
 
+    this.analyzing = true;
+    this.analysisStatuses = photoIds
+      ? this.analysisStatuses.filter((st) => !photoIds.includes(st.photoId))
+      : [];
+    this.analysisProgress = `0/${photoIds?.length ?? s.photos.length}`;
+    this.analysisResult = null;
+    this.updateAnalysisProgressDom();
+
+    const pipeline = new SurveyAnalysisPipeline(analyzer);
     try {
       const fresh = (await surveyDb.loadSurvey(s.id)) ?? s;
 
-      const result = await new MockAnalyzer().analyze(fresh);
+      const result = await pipeline.analyze(fresh, {
+        ...(photoIds ? { photoIds } : {}),
+        onProgress: (p) => {
+          this.analysisStatuses = [...this.analysisStatuses, p.status];
+          this.analysisProgress = `${p.index}/${p.total}`;
+          this.updateAnalysisProgressDom();
+        }
+      });
 
-      // Nearby OSM lookup (duplicate detection + position evidence).
-      // Issue #5: cover the WHOLE surveyed area — track samples, photo
-      // positions and candidate positions — in a single bbox query, then
-      // score each candidate against nearby objects using ITS OWN feature
-      // class. Anchoring to the last GPS point missed objects photographed
-      // elsewhere along long walks.
-      const anchorPoints: LatLon[] = [
-        ...fresh.gpsSamples.map((g) => ({ lat: g.lat, lon: g.lon })),
-        ...fresh.photos
-          .filter((p) => p.gps)
-          .map((p) => ({ lat: p.gps!.lat, lon: p.gps!.lon })),
-        ...result.candidates
-          .filter((c) => c.lat != null && c.lon != null)
-          .map((c) => ({ lat: c.lat!, lon: c.lon! }))
-      ];
-      const nearby = await fetchOsmInArea(anchorPoints);
-      for (const c of result.candidates) {
-        c.osmMatches = annotateCandidate(c, nearby, 120);
+      if (photoIds) {
+        // Retry path: merge the new observations with the previously
+        // saved ones (dropping the retried photos' stale observations),
+        // then rebuild candidates from the merged set — grouping and
+        // estimation are pure and provider-agnostic (issue #2).
+        const saved = await surveyDb.listObservations(fresh.id);
+        const keep = saved.filter((o) => !photoIds.includes(o.photoId));
+        result.observations = [...keep, ...result.observations];
+        result.candidates = pipeline.buildCandidates(fresh, result.observations);
       }
+
+      await this.enrichCandidates(fresh, result.candidates);
+      await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
+      fresh.candidates = result.candidates;
+      this.survey = fresh;
+      this.analysisResult = result;
+      this.stopRecordingNow();
+
+      const failed = result.photoStatuses?.filter((st) => st.status === 'error') ?? [];
+      if (failed.length > 0) {
+        // Partial success: result saved, failed photos stay visible on
+        // this screen with a retry affordance (issue #2).
+        this.updateAnalysisProgressDom();
+        this.updateAnalysisResultDom();
+        toast(`Analysis finished with ${failed.length} failed photo(s)`);
+      } else {
+        this.mapView.setTrack(fresh);
+        this.mapView.setPhotos(fresh.photos);
+        this.mapView.setCandidates(fresh.candidates);
+        this.mapView.fitToSurvey(fresh);
+        this.mode = 'review';
+        this.render();
+        toast(`${result.candidates.length} candidate(s) created`);
+      }
+    } catch (e) {
+      toast(`Analysis failed: ${(e as Error).message}`);
+    } finally {
+      this.analyzing = false;
+      this.updateAnalysisProgressDom();
+      this.updateAnalysisResultDom();
+    }
+  }
+
+  /** Post-analysis enrichment (kept OUT of the provider/pipeline by
+   *  design — issue #2): nearby OSM lookup (duplicate detection +
+   *  position evidence), bounded aerial structural refinement
+   *  (issue #8) and conditional OSM snap. Operates on the candidates
+   *  and the survey; failures degrade gracefully (the OSM lookup
+   *  returns an empty list, imagery refinement is skipped on gap).
+   */
+  private async enrichCandidates(fresh: Survey, candidates: FeatureCandidate[]): Promise<void> {
+    // Nearby OSM lookup (duplicate detection + position evidence).
+    // Issue #5: cover the WHOLE surveyed area — track samples, photo
+    // positions and candidate positions — in a single bbox query, then
+    // score each candidate against nearby objects using ITS OWN feature
+    // class. Anchoring to the last GPS point missed objects photographed
+    // elsewhere along long walks.
+    const anchorPoints: LatLon[] = [
+      ...fresh.gpsSamples.map((g) => ({ lat: g.lat, lon: g.lon })),
+      ...fresh.photos
+        .filter((p) => p.gps)
+        .map((p) => ({ lat: p.gps!.lat, lon: p.gps!.lon })),
+      ...candidates
+        .filter((c) => c.lat != null && c.lon != null)
+        .map((c) => ({ lat: c.lat!, lon: c.lon! }))
+    ];
+    const nearby = await fetchOsmInArea(anchorPoints);
+    for (const c of candidates) {
+      c.osmMatches = annotateCandidate(c, nearby, 120);
+    }
 
       // Issue #8: PositionSolution provenance chain.
       // 1) raw ground-survey estimate (always kept) -> 2) bounded aerial
       // structural refinement (few meters, capped by uncertainty) ->
       // 3) conditional OSM snap (only strong + essentially unique).
-      for (const c of result.candidates) {
-        if (c.lat == null || c.lon == null) continue;
+    for (const c of candidates) {
+      if (c.lat == null || c.lon == null) continue;
         const est = { lat: c.lat, lon: c.lon };
         // Issue #3: the uncertainty is EVIDENCE-DERIVED (GPS accuracy,
         // heading quality, distance uncertainty, staleness, fit error) —
@@ -665,24 +802,197 @@ class App {
         }
       }
 
-      await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
-      fresh.candidates = result.candidates;
-      this.survey = fresh;
-      this.stopRecordingNow();
+  }
 
-      this.mapView.setTrack(fresh);
-      this.mapView.setPhotos(fresh.photos);
-      this.mapView.setCandidates(fresh.candidates);
-      this.mapView.fitToSurvey(fresh);
+  /* ---------------- analysis screen ---------------- */
 
-      this.mode = 'review';
-      this.render();
-      toast(`${result.candidates.length} candidate(s) created`);
-    } catch (e) {
-      toast(`Analysis failed: ${(e as Error).message}`);
-    } finally {
-      this.analyzing = false;
+  private renderAnalysisScreen(): void {
+    const s = this.survey;
+    if (!s) return;
+    this.setMode('analysis', 'Map photos');
+
+    // Restore a previously persisted BYOK key (only exists if the user
+    // opted in on an earlier session).
+    if (this.analyzerKind === 'openai' && this.openaiKey === '') {
+      try {
+        const saved = localStorage.getItem(OPENAI_KEY_STORAGE_KEY);
+        if (saved) {
+          this.openaiKey = saved;
+          this.openaiKeyPersist = true;
+        }
+      } catch {
+        // ignore
+      }
     }
+
+    const keyInput = el('input', {
+      type: 'password',
+      id: 'openai-key',
+      class: 'note-input',
+      placeholder: 'OpenAI API key (sk-…)',
+      value: this.openaiKey,
+      oninput: () => { this.openaiKey = (keyInput as HTMLInputElement).value; }
+    });
+    const modelInput = el('input', {
+      type: 'text',
+      id: 'openai-model',
+      class: 'note-input',
+      placeholder: 'Model (default: gpt-4o-mini)',
+      value: this.openaiModel,
+      oninput: () => { this.openaiModel = (modelInput as HTMLInputElement).value; }
+    });
+    const persistChk = el('input', {
+      type: 'checkbox',
+      id: 'openai-persist',
+      checked: this.openaiKeyPersist,
+      onchange: () => { this.openaiKeyPersist = persistChk.checked; }
+    });
+    const openaiPanel = el(
+      'div',
+      { class: 'analyzer-panel' },
+      el('div', { class: 'field' }, el('label', { for: 'openai-key' }, 'API key'), keyInput),
+      el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput),
+      el(
+        'label',
+        { class: 'persist-row' },
+        persistChk,
+        ' Save key on this device (otherwise in-memory only)'
+      ),
+      el(
+        'div',
+        { class: 'hint' },
+        'Bring your own key (BYOK): it is sent only to api.openai.com and this app never stores it unless you tick the box.'
+      )
+    );
+
+    const kindMock = el(
+      'label',
+      { class: 'radio-row' },
+      el(
+        'input',
+        {
+          type: 'radio',
+          name: 'analyzer',
+          value: 'mock',
+          checked: this.analyzerKind === 'mock',
+          onchange: () => {
+            this.analyzerKind = 'mock';
+            this.content.dataset.analyzer = 'mock';
+          }
+        },
+        ' Mock (offline demo)'
+      )
+    );
+    const kindOpenai = el(
+      'label',
+      { class: 'radio-row' },
+      el(
+        'input',
+        {
+          type: 'radio',
+          name: 'analyzer',
+          value: 'openai',
+          checked: this.analyzerKind === 'openai',
+          onchange: () => {
+            this.analyzerKind = 'openai';
+            this.content.dataset.analyzer = 'openai';
+          }
+        },
+        ' OpenAI vision (BYOK)'
+      )
+    );
+
+    const progressBox = el('div', { id: 'analysis-progress', class: 'analysis-progress' });
+    const resultBox = el('div', { id: 'analysis-result', class: 'analysis-result' });
+
+    this.content.replaceChildren(
+      el(
+        'div',
+        { class: 'analysis-screen' },
+        el('div', { class: 'section-title' }, 'Analyzer'),
+        kindMock,
+        kindOpenai,
+        openaiPanel,
+        el('div', { class: 'section-title' }, `${s.photos.length} photo(s)`),
+        el('div', { class: 'section-title' }, 'Batch progress'),
+        progressBox,
+        resultBox
+      )
+    );
+    this.content.dataset.analyzer = this.analyzerKind;
+
+    this.bottombar.replaceChildren(
+      el('button', { class: 'btn', onclick: () => { this.mode = 'survey'; this.render(); } }, '← Field'),
+      el('button', {
+        id: 'analyze-btn',
+        class: 'btn primary',
+        disabled: this.analyzing || s.photos.length === 0,
+        onclick: () => void this.runAnalysis()
+      }, 'Analyze photos')
+    );
+
+    this.updateAnalysisProgressDom();
+    this.updateAnalysisResultDom();
+  }
+
+  /** Live batch progress (issue #2): in-place DOM update so input focus
+   *  is preserved while photos are processed one by one. */
+  private updateAnalysisProgressDom(): void {
+    const box = this.content.querySelector<HTMLElement>('#analysis-progress');
+    if (!box) return;
+    const lines: Node[] = [];
+    if (this.analyzing) {
+      lines.push(el('div', { class: 'analysis-status running' }, `Analyzing ${this.analysisProgress}…`));
+    }
+    for (const st of this.analysisStatuses) {
+      if (st.status === 'ok') {
+        lines.push(
+          el('div', { class: 'analysis-status ok' },
+            `✓ ${st.photoId.slice(0, 8)} — ${st.observationCount ?? 0} object(s)`)
+        );
+      } else {
+        lines.push(
+          el('div', { class: 'analysis-status error' },
+            `✗ ${st.photoId.slice(0, 8)} — ${st.error ?? 'provider error'}`)
+        );
+      }
+    }
+    box.replaceChildren(...lines);
+  }
+
+  /** Result summary + retry affordance for failed photos (issue #2). */
+  private updateAnalysisResultDom(): void {
+    const box = this.content.querySelector<HTMLElement>('#analysis-result');
+    if (!box) return;
+    const btn = this.bottombar.querySelector<HTMLButtonElement>('#analyze-btn');
+    if (btn) btn.disabled = this.analyzing;
+
+    const result = this.analysisResult;
+    if (this.analyzing || !result) {
+      box.replaceChildren();
+      return;
+    }
+    const failed = result.photoStatuses?.filter((st) => st.status === 'error') ?? [];
+    const lines: Node[] = [
+      el('div', { class: 'analysis-summary' },
+        `${result.candidates.length} candidate(s) from ${result.observations.length} observation(s) — analyzer: ${result.analyzerName ?? this.analyzerKind}`)
+    ];
+    if (failed.length > 0) {
+      lines.push(
+        el('button', {
+          class: 'btn retry-btn',
+          onclick: () => void this.runAnalysis(failed.map((f) => f.photoId))
+        }, `Retry ${failed.length} failed photo(s)`)
+      );
+    } else {
+      lines.push(
+        el('button', {
+          class: 'btn primary',
+          onclick: () => { this.mode = 'review'; this.render(); }
+        }, 'Review candidates →')
+      );
+    }
+    box.replaceChildren(...lines);
   }
 
   /* ---------------- review screen ---------------- */
@@ -714,7 +1024,8 @@ class App {
     }
 
     const photoByObs = this.photosForObservations(s, observations);
-    const cards = s.candidates.map((c) => this.buildCandidateCard(c, photoByObs));
+    const obsById = new Map<string, Observation>(observations.map((o) => [o.id, o]));
+    const cards = s.candidates.map((c) => this.buildCandidateCard(c, photoByObs, obsById));
     this.content.replaceChildren(
       el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
       ...cards
@@ -734,7 +1045,11 @@ class App {
     return map;
   }
 
-  private buildCandidateCard(c: FeatureCandidate, photoByObs: Map<string, Photo | undefined>): HTMLElement {
+  private buildCandidateCard(
+    c: FeatureCandidate,
+    photoByObs: Map<string, Photo | undefined>,
+    obsById: Map<string, Observation>
+  ): HTMLElement {
     const cls = getFeatureClass(c.featureType);
     const card = el('div', { class: `candidate status-${c.status}` });
 
@@ -940,6 +1255,30 @@ class App {
         this.buildAddTagRow(c)
       )
     );
+
+    // Issue #2: attributes the analyzer detected but that did NOT reach
+    // the auto-tag threshold (or came from review-only/unknown classes)
+    // are shown as unconfirmed evidence — they never silently become
+    // OSM tags.
+    const detected = c.observationIds
+      .map((id) => obsById.get(id)?.detectedAttributes)
+      .filter((v): v is Record<string, string> => v != null && Object.keys(v).length > 0);
+    if (detected.length > 0) {
+      const merged: Record<string, string[]> = {};
+      for (const attrs of detected) {
+        for (const [k, v] of Object.entries(attrs)) (merged[k] ??= []).push(v);
+      }
+      card.append(
+        el(
+          'div',
+          { class: 'detected-attrs', title: 'Detected but unconfirmed — NOT applied as OSM tags (issue #2)' },
+          el('b', {}, 'Detected (unconfirmed)'),
+          ...Object.entries(merged).map(([k, vs]) =>
+            el('span', { class: 'tag-chip detected' }, ` ${k}=${vs.join(' | ')}`)
+          )
+        )
+      );
+    }
 
     // Issue #9: OSM mapping picker for review-only classes (ambiguous or
     // unconfirmed semantics). Choosing a mapping applies its tags; the
