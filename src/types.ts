@@ -14,8 +14,9 @@ export interface GpsSample {
   lat: number;
   /** WGS84 longitude, degrees. */
   lon: number;
-  /** Reported horizontal accuracy, meters (>= 0). */
-  accuracy: number;
+  /** Reported horizontal accuracy in meters (>= 0). Absent when the
+   *  provider did not report one (e.g. EXIF GPS). */
+  accuracy?: number;
   /** Epoch milliseconds. */
   timestamp: number;
   /** Ground speed, m/s (when available). */
@@ -27,7 +28,43 @@ export interface GpsSample {
 /** Where a photo's capture timestamp came from (quality marker). */
 export type TimestampSource = 'exif' | 'file' | 'selected';
 
-/** A captured photo associated with the nearest GPS context. */
+/** Provenance of a photo's camera position (issue #10). */
+export type CameraPositionSource = 'track' | 'capture-fix' | 'exif';
+
+/**
+ * Where the CAMERA was when the photo was taken (issue #10). This is
+ * evidence for locating the photographed object — never the object's own
+ * coordinates. `source` records how the position was obtained, and
+ * `accuracy`/`ageMs` are quality/freshness evidence the reviewer can see.
+ */
+export interface CameraPosition {
+  lat: number;
+  lon: number;
+  /** Reported horizontal accuracy in meters, when known. */
+  accuracy?: number;
+  /** Capture time (epoch ms) — the moment the position refers to. */
+  timestamp: number;
+  /** Time of the underlying fix/sample (epoch ms). */
+  fixTimestamp: number;
+  /** |capture − fix| in ms: how stale the position is relative to capture. */
+  ageMs: number;
+  source: CameraPositionSource;
+  /** True when interpolated between two track samples. */
+  interpolated?: boolean;
+  /** True when the capture time lies inside the recorded track span. */
+  inSpan?: boolean;
+}
+
+/**
+ * A captured photo associated with its camera position.
+ * Issue #6: timestamp is the capture time from EXIF/file metadata, and the
+ * position context is the position at that moment (not the newest sample
+ * at selection time).
+ * Issue #10: that position is the CAMERA position at capture time, kept
+ * independently of continuous Record mode and tagged with its provenance
+ * in `cameraPosition`. `gps` is a compatibility alias for downstream
+ * consumers (map markers, ray estimation, position evidence).
+ */
 export interface Photo {
   id: string;
   surveyId: string;
@@ -38,7 +75,9 @@ export interface Photo {
   timestampSource?: TimestampSource;
   /** JPEG image data (base64) or a pointer; kept out of the index for MVP. */
   image?: string;
-  /** Track sample (or interpolation between samples) at capture time. */
+  /** Camera position at capture time, with provenance (issue #10). */
+  cameraPosition?: CameraPosition;
+  /** Compatibility alias of `cameraPosition` (old shape) for consumers. */
   gps?: GpsSample;
   /** Camera heading at capture, degrees (when available). */
   heading?: number;

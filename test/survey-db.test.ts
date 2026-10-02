@@ -78,6 +78,18 @@ function makeLegacySurvey(
       timestampSource: 'exif',
       image: `data:image/jpeg;base64,VERYLARGE${n}`,
       gps: gps[0],
+      // Issue #10: provenance-tagged camera position must survive the
+      // IndexedDB round trip.
+      cameraPosition: {
+        lat: 48.8,
+        lon: 2.3,
+        accuracy: 5,
+        timestamp: 1500,
+        fixTimestamp: 1000,
+        ageMs: 500,
+        source: 'track',
+        interpolated: true
+      },
       heading: 90
     }
   ];
@@ -248,6 +260,15 @@ describe('v1 -> v2 migration', () => {
     expect(loaded?.photos).toHaveLength(1);
     expect(loaded?.photos?.[0]).toMatchObject({ id: 'p1', timestamp: 1500, timestampSource: 'exif' });
     expect(loaded?.photos?.[0].image).toBe('data:image/jpeg;base64,VERYLARGE1');
+    // Issue #10: camera-position provenance survives the round trip.
+    expect(loaded?.photos?.[0].cameraPosition).toMatchObject({
+      source: 'track',
+      lat: 48.8,
+      lon: 2.3,
+      accuracy: 5,
+      ageMs: 500,
+      interpolated: true
+    });
     expect(loaded?.candidates).toHaveLength(1);
     expect(loaded?.candidates?.[0]).toMatchObject({ id: 'c1', featureType: 'bench', observationIds: ['o1'] });
     // gpsSamples are returned in timestamp order

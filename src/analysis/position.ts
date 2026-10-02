@@ -44,6 +44,10 @@ export function bearingToLatLon(
   return { lat: (phi2 * 180) / Math.PI, lon: (lambda2 * 180) / Math.PI };
 }
 
+/** Assumed GPS accuracy (m) when a fix reports none — a conservative
+ * middle value, so unknown accuracy is never treated as perfect. */
+const ASSUMED_ACCURACY_M = 10;
+
 /**
  * Refine the capture heading using where the object sits in the image.
  *
@@ -72,8 +76,8 @@ export interface ObservationRay {
   lon: number;
   bearingDeg: number;
   distanceM: number;
-  /** Reported GPS accuracy (m) at capture. */
-  gpsAccuracy: number;
+  /** Reported GPS accuracy (m) at capture; absent when unknown. */
+  gpsAccuracy?: number;
   /** Whether the bearing is grounded in real orientation data. */
   hasHeading: boolean;
 }
@@ -111,7 +115,9 @@ export function estimatePosition(rays: ObservationRay[]): PositionEstimate {
     const r = rays[0];
     const d = r.distanceM;
     const { lat, lon } = bearingToLatLon(r.lat, r.lon, r.bearingDeg, d);
-    const acc = r.gpsAccuracy;
+    // Unknown accuracy is penalized as 10 m: conservative, never assumed
+    // perfect (issue #10 — EXIF GPS carries no accuracy report).
+    const acc = r.gpsAccuracy ?? ASSUMED_ACCURACY_M;
     // Confidence drops with GPS accuracy and with an unknown distance.
     let confidence = clamp01(1 - acc / 100);
     if (!r.hasHeading) confidence *= 0.4;
@@ -156,8 +162,13 @@ export function estimatePosition(rays: ObservationRay[]): PositionEstimate {
 
   // Angular error (degrees) -> confidence. Small error = high confidence.
   const confidence = clamp01(1 - best.error / 90);
-  const meanAcc = rays.reduce((s, r) => s + r.gpsAccuracy, 0) / rays.length;
-  if (meanAcc > 20) warnings.push(`GPS accuracy is coarse (mean ~${Math.round(meanAcc)} m).`);
+  const accs = rays.map((r) => r.gpsAccuracy).filter((a): a is number => a != null);
+  if (accs.length === 0) {
+    warnings.push('GPS accuracy unknown for all rays; position quality unverified.');
+  } else {
+    const meanAcc = accs.reduce((s, a) => s + a, 0) / accs.length;
+    if (meanAcc > 20) warnings.push(`GPS accuracy is coarse (mean ~${Math.round(meanAcc)} m).`);
+  }
   if (best.error > 30) warnings.push('Observation rays disagree; position is low confidence.');
 
   return { lat: best.lat, lon: best.lon, positionConfidence: confidence, warnings };
@@ -267,7 +278,10 @@ export function trackPositionAt(
     id: `gps-interp-${at}`,
     lat: a.lat + (b.lat - a.lat) * t,
     lon: a.lon + (b.lon - a.lon) * t,
-    accuracy: Math.max(a.accuracy, b.accuracy), // conservative: worst of the pair
+    accuracy: (() => {
+      const accs = [a.accuracy, b.accuracy].filter((x): x is number => x != null);
+      return accs.length > 0 ? Math.max(...accs) : undefined; // worst of the pair
+    })(),
     timestamp: at,
     speed: a.speed != null && b.speed != null ? a.speed + (b.speed - a.speed) * t : undefined,
     heading:

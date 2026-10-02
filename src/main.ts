@@ -4,6 +4,14 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapView } from './map/map-view';
 import { GeolocationTracker } from './capture/geolocation-tracker';
 import { capturePhoto } from './capture/photo';
+import {
+  requestOneShotFix,
+  withTimeout,
+  classifyGps,
+  formatGpsStatus,
+  describeCameraPosition,
+  type OneShotFix
+} from './capture/camera-position';
 import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
@@ -26,6 +34,7 @@ import { selectProvider } from './imagery/providers';
 import type {
   CandidateStatus,
   FeatureCandidate,
+  Photo,
   Observation,
   OsmMatch,
   PositionSolution,
@@ -104,6 +113,13 @@ class App {
   private mode: Mode = 'list';
   private survey: Survey | null = null;
   private tracker: GeolocationTracker | null = null;
+  /** One-shot GPS fix started in the photo button's gesture (issue #10). */
+  private pendingFix: Promise<OneShotFix | null> | null = null;
+  /** Latest live fix, used by the GPS status when not recording. */
+  private liveFix: OneShotFix | null = null;
+  private gpsStatus: HTMLElement;
+  private gpsPollTimer: number | undefined;
+  private gpsTickTimer: number | undefined;
   private analyzing = false;
 
   constructor() {
@@ -125,7 +141,10 @@ class App {
       el('span', { class: 'dot' }),
       'REC'
     );
-    const mapWrap = el('div', { id: 'map-wrap' }, el('div', { id: 'map' }), this.recBadge);
+    // Issue #10: GPS readiness strip — visible on the survey screen
+    // regardless of Record mode, so missing GPS is never silent.
+    this.gpsStatus = el('div', { id: 'gps-status', class: 'gps-status hidden', role: 'status' });
+    const mapWrap = el('div', { id: 'map-wrap' }, el('div', { id: 'map' }), this.recBadge, this.gpsStatus);
 
     this.content = el('div', { id: 'content' });
     this.bottombar = el('div', { id: 'bottombar' });
@@ -173,6 +192,7 @@ class App {
     document.body.dataset.mode = mode;
     this.title.textContent = title;
     this.backBtn.classList.toggle('hidden', mode === 'list');
+    if (mode !== 'survey') this.stopGpsStatus();
     requestAnimationFrame(() => this.mapView.map.resize());
   }
 
@@ -343,7 +363,21 @@ class App {
       },
       s.recording ? '⏹ Stop' : '⏺ Record'
     );
-    const camBtn = el('button', { class: 'btn accent', onclick: () => photoInput.click() }, '📷 Photo');
+    const camBtn = el(
+      'button',
+      {
+        class: 'btn accent',
+        onclick: () => {
+          // Issue #10: start the one-shot GPS fix and open the camera/file
+          // input IN THE SAME user gesture. Awaiting the fix first would
+          // lose the transient user activation and the camera would not
+          // open. The fix is awaited (bounded) in onPhotoTaken instead.
+          this.pendingFix = requestOneShotFix(15_000);
+          photoInput.click();
+        }
+      },
+      '📷 Photo'
+    );
     const mapBtn = el(
       'button',
       {
@@ -356,6 +390,10 @@ class App {
     );
 
     this.bottombar.replaceChildren(recBtn, camBtn, note, mapBtn, photoInput);
+
+    // Issue #10: keep the GPS readiness indicator live on the field
+    // screen, independent of Record mode.
+    this.startGpsStatus();
   }
 
   private async toggleRecording(): Promise<void> {
@@ -401,6 +439,55 @@ class App {
     }
   }
 
+  /* ---------------- GPS readiness status (issue #10) ---------------- */
+
+  /** Keep the GPS readiness strip live on the survey screen, independent
+   *  of Record mode. Idempotent: safe to call on every render. */
+  private startGpsStatus(): void {
+    this.gpsStatus.classList.remove('hidden');
+    window.clearInterval(this.gpsTickTimer);
+    this.gpsTickTimer = window.setInterval(() => this.refreshGpsStatus(), 1000);
+    // Poll a live fix only while the track recorder is inactive (it
+    // already streams samples then). Refresh every 5 s; each poll is a
+    // bounded one-shot request that resolves to null on denial/timeout.
+    window.clearInterval(this.gpsPollTimer);
+    const poll = (): void => {
+      if (this.tracker) return;
+      void requestOneShotFix(8000).then((fix) => {
+        if (fix && this.mode === 'survey') {
+          this.liveFix = fix;
+          this.refreshGpsStatus();
+        }
+      });
+    };
+    poll();
+    this.gpsPollTimer = window.setInterval(poll, 5000);
+    this.refreshGpsStatus();
+  }
+
+  private stopGpsStatus(): void {
+    window.clearInterval(this.gpsTickTimer);
+    this.gpsTickTimer = undefined;
+    window.clearInterval(this.gpsPollTimer);
+    this.gpsPollTimer = undefined;
+    this.gpsStatus.classList.add('hidden');
+  }
+
+  private refreshGpsStatus(): void {
+    const s = this.survey;
+    if (!s) return;
+    const now = Date.now();
+    // While recording, the newest track sample IS the live fix.
+    const last = s.gpsSamples[s.gpsSamples.length - 1];
+    const fromTrack = this.tracker != null && last != null;
+    const fix: OneShotFix | null = fromTrack
+      ? { lat: last.lat, lon: last.lon, accuracy: last.accuracy, timestamp: last.timestamp }
+      : this.liveFix;
+    const state = classifyGps(fix, now);
+    this.gpsStatus.textContent = formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live');
+    this.gpsStatus.className = `gps-status gps-${state}`;
+  }
+
   private async onPhotoTaken(input: HTMLInputElement): Promise<void> {
     const s = this.survey;
     const file = input.files?.[0];
@@ -409,15 +496,22 @@ class App {
 
     const noteEl = this.bottombar.querySelector<HTMLInputElement>('#photo-note');
     try {
+      // Issue #10: the one-shot fix was started in the SAME user gesture as
+      // the file input (see the photo button handler). Give it a bounded
+      // wait — the capture must not be held hostage by a slow or denied
+      // geolocation request — then fall through to EXIF/none.
+      const captureFix = this.pendingFix ? await withTimeout(this.pendingFix, 8000, null) : null;
+      this.pendingFix = null;
+
       // Issue #6: the photo's timestamp comes from EXIF / file metadata (the
-      // true capture time, not "now"), and its GPS context is the track
-      // position at THAT moment (interpolated when between samples) — not
-      // the newest sample at selection time. EXIF GPS is never used as the
-      // object position.
+      // true capture time, not "now"). Issue #10: its camera position at
+      // THAT moment is resolved with explicit provenance (track >
+      // capture-time fix > EXIF); a stale track endpoint is never attached.
       const photo = await capturePhoto({
         surveyId: s.id,
         file,
         track: s.gpsSamples,
+        captureFix,
         heading: this.tracker?.currentHeading,
         note: noteEl?.value.trim() || undefined
       });
@@ -425,7 +519,10 @@ class App {
       this.mapView.setPhotos(s.photos);
       if (noteEl) noteEl.value = '';
       const srcNote = photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
-      toast(`Photo captured (${s.photos.length})${srcNote}`);
+      const camNote = photo.cameraPosition
+        ? ` · cam: ${describeCameraPosition(photo.cameraPosition)}`
+        : ' · no GPS — needs manual positioning';
+      toast(`Photo captured (${s.photos.length})${srcNote}${camNote}`);
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
       if (mapBtn) mapBtn.disabled = false;
     } catch (e) {
@@ -590,20 +687,21 @@ class App {
   private photosForObservations(
     s: Survey,
     observations: Observation[]
-  ): Map<string, string | undefined> {
-    const map = new Map<string, string | undefined>();
+  ): Map<string, Photo | undefined> {
+    // Issue #10: the review screen needs the FULL photo (image + camera
+    // position provenance), not just the image data URL.
+    const map = new Map<string, Photo | undefined>();
     for (const obs of observations) {
-      const photo = s.photos.find((p) => p.id === obs.photoId);
-      map.set(obs.id, photo?.image);
+      map.set(obs.id, s.photos.find((p) => p.id === obs.photoId));
     }
     return map;
   }
 
-  private buildCandidateCard(c: FeatureCandidate, photoByObs: Map<string, string | undefined>): HTMLElement {
+  private buildCandidateCard(c: FeatureCandidate, photoByObs: Map<string, Photo | undefined>): HTMLElement {
     const cls = getFeatureClass(c.featureType);
     const card = el('div', { class: `candidate status-${c.status}` });
 
-    const img = c.observationIds.map((id) => photoByObs.get(id)).find((v) => v) ?? '';
+    const img = c.observationIds.map((id) => photoByObs.get(id)?.image).find((v) => v) ?? '';
     const thumb = el('img', { class: 'thumb', src: img || undefined, alt: 'source photo' });
 
     const statusSel = el('select', {
@@ -648,6 +746,23 @@ class App {
       posRow.append(el('b', {}, 'Position'), ' unknown — drag a pin or re-photograph with GPS.');
     }
     card.append(posRow);
+
+    // Issue #10: the camera position and its provenance must be visible to
+    // the reviewer — it is evidence for the object's location, and a
+    // missing/stale fix must be an explicit, visible fact.
+    const cam = c.observationIds
+      .map((id) => photoByObs.get(id)?.cameraPosition)
+      .find((v) => v != null);
+    card.append(
+      el(
+        'div',
+        { class: 'row cam-row' },
+        el('b', {}, 'Camera'),
+        cam
+          ? ` ${describeCameraPosition(cam)} @ ${cam.lat.toFixed(5)}, ${cam.lon.toFixed(5)}`
+          : ' no GPS — position needs manual placement.'
+      )
+    );
 
     // Issue #8: position solution provenance (estimate → refined → snapped).
     const ps = c.positionSolution;

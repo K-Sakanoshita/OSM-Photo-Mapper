@@ -118,6 +118,27 @@ body[data-mode='upload'] #map-wrap { display: none; }
 }
 @keyframes pulse { 50% { opacity: 0.3; } }
 
+/* ---------- GPS readiness strip (issue #10) ---------- */
+.gps-status {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  max-width: 72%;
+  background: rgba(38, 50, 56, 0.85);
+  color: #eceff1;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 4px 10px;
+  border-radius: 12px;
+  backdrop-filter: blur(4px);
+}
+.gps-status.hidden { display: none; }
+.gps-status.gps-ready { background: rgba(27, 94, 32, 0.88); }
+.gps-status.gps-coarse { background: rgba(122, 91, 0, 0.88); }
+.gps-status.gps-stale { background: rgba(93, 64, 55, 0.88); }
+.gps-status.gps-unavailable { background: rgba(127, 28, 28, 0.88); }
+
 /* ---------- Content (list screens) ---------- */
 
 #content {
@@ -426,6 +447,7 @@ body[data-mode='upload'] #content { display: block; }
 #toast.show { opacity: 1; }
 
 /* ---------- Issue #9: review-only classes, mapping picker, geometry policy ---------- */
+.cam-row { color: var(--muted); font-size: 0.82em; }
 .review-only-note {
   margin-top: 8px;
   font-size: 12px;
