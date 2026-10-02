@@ -18,6 +18,7 @@ import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
 import { buildOsmChange } from './osm/osmchange';
+import { validateCandidateExport } from './analysis/export-validation';
 import { fetchLiveObject, type LiveOsmObject } from './osm/osm-api';
 import {
   applyMappingToTags,
@@ -748,6 +749,20 @@ class App {
       );
     }
 
+    // Issue #11: semantic gate — make the missing requirement explicit
+    // HERE, before the reviewer reaches the upload screen. (Geometry
+    // blocks are shown further down as the geometry note.)
+    const exportCheck = validateCandidateExport(c);
+    if (c.status === 'new' && !exportCheck.exportable && exportCheck.gate === 'semantics') {
+      card.append(
+        el(
+          'div',
+          { class: 'needs-tag-review', title: 'Semantic export gate (issue #11)' },
+          `Needs tag review: ${exportCheck.reason}`
+        )
+      );
+    }
+
     const posRow = el('div', { class: 'row' });
     if (c.lat != null && c.lon != null) {
       posRow.append(
@@ -1138,19 +1153,19 @@ class App {
     if (!s) return;
     this.setMode('upload', 'Review upload');
 
-    // Issue #9 geometry policy: area-based classes are never created from a
-    // point position — the app must not fabricate polygon/way geometry from
-    // a single photo.
-    const isAreaClass = (c: FeatureCandidate): boolean => {
-      const p = geometryPreferenceFor(c.featureType);
-      return p === 'area' || p === 'existing-only';
-    };
-    const add = s.candidates.filter(
-      (c) => c.status === 'new' && c.lat != null && c.lon != null && !isAreaClass(c)
+    // Export gates (issues #9/#11): geometry policy AND semantic
+    // completeness are separate, explicit gates. A candidate may be
+    // detected and positioned without being ready to export; unresolved
+    // candidates are shown in their own sections and excluded from the
+    // osmChange until resolved in review.
+    const validations = new Map(
+      s.candidates.map((c) => [c.id, validateCandidateExport(c)] as const)
     );
-    const areaBlocked = s.candidates.filter(
-      (c) => c.status === 'new' && c.lat != null && c.lon != null && isAreaClass(c)
-    );
+    const positionedNew = (c: FeatureCandidate): boolean =>
+      c.status === 'new' && c.lat != null && c.lon != null;
+    const add = s.candidates.filter((c) => positionedNew(c) && validations.get(c.id)!.exportable);
+    const areaBlocked = s.candidates.filter((c) => positionedNew(c) && validations.get(c.id)!.gate === 'geometry');
+    const needsTagReview = s.candidates.filter((c) => positionedNew(c) && validations.get(c.id)!.gate === 'semantics');
     const linked = s.candidates.filter((c) => c.status === 'existing' && c.linkedOsmId != null);
     // Issue #4: only node modifications can be exported (a way modify would
     // require the full node list, which the MVP does not fetch). Linked
@@ -1191,6 +1206,28 @@ class App {
                 'Area-based feature classes are never created from a single photo — the app does not fabricate polygon/way geometry. Link these candidates to an existing object or draw the boundary in an editor.'
               ),
               ...areaBlocked.map((c) => this.buildEditRow(c, 'add'))
+            )
+          ]),
+      ...(needsTagReview.length === 0
+        ? []
+        : [
+            el(
+              'div',
+              { class: 'upload-section' },
+              el('h2', {}, `Needs tag review ${needsTagReview.length}`),
+              el(
+                'div',
+                { class: 'row warn' },
+                'Issue #11: these candidates have no reviewed, meaningful OSM tag mapping yet. Resolve them in review (choose a mapping or set tags) before they can be uploaded — a coordinate alone never becomes a new OSM node.'
+              ),
+              ...needsTagReview.map((c) => {
+                const cls = getFeatureClass(c.featureType);
+                return el(
+                  'div',
+                  { class: 'edit-item' },
+                  `${cls?.label ?? c.featureType} — ${validations.get(c.id)!.reason}`
+                );
+              })
             )
           ]),
       el(

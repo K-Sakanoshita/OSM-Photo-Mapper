@@ -1,6 +1,6 @@
 import type { FeatureCandidate, OsmType, Survey } from '../types';
 import type { LiveOsmObject } from './osm-api';
-import { geometryPreferenceFor } from '../analysis/feature-classes';
+import { validateCandidateExport } from '../analysis/export-validation';
 
 /**
  * OSMChange exporter (issue #4).
@@ -36,6 +36,11 @@ import { geometryPreferenceFor } from '../analysis/feature-classes';
  *    draws the boundary in an editor. ('node' and 'either' classes are
  *    created as nodes: a point representation is legitimate for small
  *    facilities.)
+ *  - Semantic gate (issue #11): a NEW candidate is only created when it
+ *    carries a reviewed, meaningful semantic tag mapping (see
+ *    export-validation.ts). A coordinate alone never becomes an untagged
+ *    OSM node; unresolved candidates are reported in `semanticsBlocked`
+ *    and excluded from the file until resolved in review.
  */
 
 export interface OsmChangeConflict {
@@ -63,11 +68,10 @@ export interface OsmChangeResult {
   /** New candidates excluded by the geometry policy (area-based classes
    *  are never created as fabricated polygons from a single photo). */
   geometryBlocked: { candidateId: string; featureType: string; reason: string }[];
+  /** New candidates excluded by the semantic gate (issue #11): no reviewed,
+   *  meaningful OSM tag mapping yet. Distinguishable from geometryBlocked. */
+  semanticsBlocked: { candidateId: string; featureType: string; reason: string }[];
 }
-
-const AREA_BLOCK_REASON =
-  'area-based feature class — the app does not fabricate polygon/way geometry from a single photo; ' +
-  'link this candidate to an existing object or draw the boundary in an editor';
 
 function esc(s: string): string {
   return s
@@ -96,19 +100,21 @@ export function buildOsmChange(
   const conflicts: OsmChangeConflict[] = [];
   const blocked: OsmChangeBlocked[] = [];
   const geometryBlocked: OsmChangeResult['geometryBlocked'] = [];
+  const semanticsBlocked: OsmChangeResult['semanticsBlocked'] = [];
   const modifyBlocks: string[] = [];
 
-  // Geometry policy (issue #9): area-based classes are never created from
-  // a point position.
+  // Export gates for new candidates (issues #9/#11): geometry policy AND
+  // semantic completeness are independent gates. A candidate may be
+  // detected and positioned without being ready to export.
   const creates: FeatureCandidate[] = survey.candidates
     .filter((c) => c.status === 'new' && c.lat != null && c.lon != null)
     .filter((c) => {
-      const pref = geometryPreferenceFor(c.featureType);
-      if (pref === 'area' || pref === 'existing-only') {
-        geometryBlocked.push({ candidateId: c.id, featureType: c.featureType, reason: AREA_BLOCK_REASON });
-        return false;
-      }
-      return true;
+      const v = validateCandidateExport(c);
+      if (v.exportable) return true;
+      const entry = { candidateId: c.id, featureType: c.featureType, reason: v.reason ?? '' };
+      if (v.gate === 'geometry') geometryBlocked.push(entry);
+      else semanticsBlocked.push(entry);
+      return false;
     });
 
   for (const c of survey.candidates) {
@@ -168,6 +174,7 @@ export function buildOsmChange(
     modifies: modifyBlocks.length,
     conflicts,
     blocked,
-    geometryBlocked
+    geometryBlocked,
+    semanticsBlocked
   };
 }

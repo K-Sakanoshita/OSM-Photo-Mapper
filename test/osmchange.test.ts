@@ -61,8 +61,10 @@ describe('buildOsmChange', () => {
   });
 
   it('escapes tag keys/values', () => {
+    // Issue #11: the candidate also carries its required class tags —
+    // a name-only tag set is not a semantic classification and is blocked.
     const res = buildOsmChange(
-      survey([candidate({ tags: { 'name': 'A&B <x>' } })]),
+      survey([candidate({ tags: { amenity: 'bench', name: 'A&B <x>' } })]),
       liveOf()
     );
     expect(res.xml).toContain('<tag k="name" v="A&amp;B &lt;x&gt;"/>');
@@ -218,5 +220,106 @@ describe('geometry policy (issue #9): no polygon fabrication', () => {
     const res = buildOsmChange(survey([c]), liveOf());
     expect(res.creates).toBe(1);
     expect(res.geometryBlocked).toEqual([]);
+    expect(res.semanticsBlocked).toEqual([]);
+  });
+});
+
+describe('semantic gate (issue #11): no untagged creates', () => {
+  it('creates a new bench with its required amenity=bench tag', () => {
+    const res = buildOsmChange(survey([candidate()]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.semanticsBlocked).toEqual([]);
+    expect(res.geometryBlocked).toEqual([]);
+  });
+
+  it('blocks a generic playground without playground=* and reports it in semanticsBlocked', () => {
+    const c = candidate({ featureType: 'playground', tags: {} });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(0);
+    expect(res.semanticsBlocked).toHaveLength(1);
+    expect(res.semanticsBlocked[0].candidateId).toBe(c.id);
+    expect(res.semanticsBlocked[0].featureType).toBe('playground');
+    expect(res.semanticsBlocked[0].reason).toContain('playground=*');
+    expect(res.geometryBlocked).toEqual([]);
+    expect(res.xml).toBe('');
+  });
+
+  it('creates the playground after playground=slide is selected', () => {
+    const c = candidate({ featureType: 'playground', tags: { playground: 'slide' } });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.semanticsBlocked).toEqual([]);
+    expect(res.xml).toContain('<tag k="playground" v="slide"/>');
+  });
+
+  it('blocks a review-only statue with no mapping/tags', () => {
+    const c = candidate({ featureType: 'statue', tags: {} });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(0);
+    expect(res.semanticsBlocked[0].featureType).toBe('statue');
+    expect(res.semanticsBlocked[0].reason).toContain('mapping');
+    expect(res.xml).toBe('');
+  });
+
+  it('creates the statue after an artwork mapping is chosen', () => {
+    const c = candidate({
+      featureType: 'statue',
+      tags: { tourism: 'artwork', artwork_type: 'statue' }
+    });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.semanticsBlocked).toEqual([]);
+    expect(res.xml).toContain('<tag k="tourism" v="artwork"/>');
+  });
+
+  it('creates a stone lantern with manually entered meaningful semantic tags', () => {
+    const c = candidate({ featureType: 'stone_lantern', tags: { historic: 'stone_lantern' } });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(1);
+    expect(res.semanticsBlocked).toEqual([]);
+  });
+
+  it('still blocks name=* alone (no semantic classification)', () => {
+    const c = candidate({ featureType: 'stone_lantern', tags: { name: 'Foo' } });
+    const res = buildOsmChange(survey([c]), liveOf());
+    expect(res.creates).toBe(0);
+    expect(res.semanticsBlocked).toHaveLength(1);
+    expect(res.xml).toBe('');
+  });
+
+  it('keeps geometry-blocked and semantics-blocked reasons distinguishable', () => {
+    const areaC = candidate({ featureType: 'playground_area', tags: { leisure: 'playground' } });
+    const genericC = candidate({ featureType: 'playground', tags: {} });
+    const res = buildOsmChange(survey([areaC, genericC]), liveOf());
+    expect(res.creates).toBe(0);
+    expect(res.geometryBlocked).toHaveLength(1);
+    expect(res.geometryBlocked[0].candidateId).toBe(areaC.id);
+    expect(res.geometryBlocked[0].reason).toContain('does not fabricate');
+    expect(res.semanticsBlocked).toHaveLength(1);
+    expect(res.semanticsBlocked[0].candidateId).toBe(genericC.id);
+    expect(res.semanticsBlocked[0].reason).toContain('playground=*');
+    expect(res.geometryBlocked[0].reason).not.toBe(res.semanticsBlocked[0].reason);
+    expect(res.xml).toBe('');
+  });
+
+  it('does not affect existing-object modify behavior', () => {
+    // A review-only class linked to an existing tagged object is still
+    // modified: the semantic gate applies to NEW objects only.
+    const c = candidate({
+      featureType: 'statue',
+      status: 'existing',
+      linkedOsmId: 777,
+      linkedOsmType: 'node',
+      tags: { name: 'Statue of the Founder' }
+    });
+    const res = buildOsmChange(
+      survey([c]),
+      liveOf(liveNode(777, 4, { historic: 'memorial' }))
+    );
+    expect(res.modifies).toBe(1);
+    expect(res.semanticsBlocked).toEqual([]);
+    expect(res.xml).toContain('<node id="777" version="4"');
+    expect(res.xml).toContain('<tag k="historic" v="memorial"/>');
+    expect(res.xml).toContain('<tag k="name" v="Statue of the Founder"/>');
   });
 });

@@ -503,3 +503,14 @@ body[data-mode='upload'] #content { display: block; }
   border-radius: 8px;
   padding: 6px 8px;
 }
+/* Issue #11: semantic export gate — the candidate has a position but no
+   reviewed, meaningful OSM tag mapping yet. */
+.needs-tag-review {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #4a3a8a;
+  background: #eeecf8;
+  border: 1px solid #c4bde2;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
