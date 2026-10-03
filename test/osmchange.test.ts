@@ -9,6 +9,7 @@ function candidate(overrides: Partial<FeatureCandidate> = {}): FeatureCandidate 
   return {
     id: `cand-${n}`,
     surveyId: 's1',
+    analyzer: 'openai',
     featureType: 'bench',
     lat: 35.68,
     lon: 139.76,
@@ -49,6 +50,14 @@ function liveOf(...objs: LiveOsmObject[]): Map<string, LiveOsmObject> {
 }
 
 describe('buildOsmChange', () => {
+  it('blocks fabricated and unverified candidates from XML', () => {
+    const mock = candidate({ analyzer: 'mock' });
+    const legacy = candidate({ analyzer: undefined, status: 'existing', linkedOsmId: 42 });
+    const res = buildOsmChange(survey([mock, legacy]), liveOf(liveNode(42, 1, {})));
+    expect(res.xml).toBe('');
+    expect(res.creates).toBe(0);
+    expect(res.modifies).toBe(0);
+  });
   it('emits <create> for new candidates with position', () => {
     const res = buildOsmChange(survey([candidate(), candidate({ lat: 1, lon: 2 })]), liveOf());
     expect(res.creates).toBe(2);

@@ -156,7 +156,7 @@ class App {
    *  request to api.openai.com.
    *  analysisStatuses/analysisProgress: live batch progress + per-photo
    *  errors (partial failure is visible and retryable). */
-  private analyzerKind: 'mock' | 'openai' = 'mock';
+  private analyzerKind: 'mock' | 'openai' = 'openai';
   private openaiMode: 'proxy' | 'direct' = 'proxy';
   private openaiKey = '';
   private openaiProxyEndpoint = '';
@@ -236,8 +236,13 @@ class App {
     document.body.dataset.mode = mode;
     this.title.textContent = title;
     this.backBtn.classList.toggle('hidden', mode === 'list');
+    this.updateRecBadge();
     if (mode !== 'survey') this.stopGpsStatus();
     requestAnimationFrame(() => this.mapView.map.resize());
+  }
+
+  private updateRecBadge(): void {
+    this.recBadge.classList.toggle('on', this.tracker != null && (this.mode === 'survey' || this.mode === 'camera'));
   }
 
   private render(): void {
@@ -408,7 +413,7 @@ class App {
     this.mapView.setTrack(s);
     this.mapView.setPhotos(s.photos);
     this.mapView.setCandidates(s.candidates);
-    this.recBadge.classList.toggle('on', s.recording);
+    this.updateRecBadge();
 
     const last = s.gpsSamples[s.gpsSamples.length - 1];
     if (s.gpsSamples.length === 1 && last) {
@@ -518,7 +523,7 @@ class App {
 
     s.recording = this.tracker != null;
     await surveyDb.saveSurveyMeta(s);
-    this.recBadge.classList.toggle('on', s.recording);
+    this.updateRecBadge();
 
     const btn = this.bottombar.querySelector<HTMLButtonElement>('#rec-btn');
     if (btn) {
@@ -530,6 +535,7 @@ class App {
   private stopRecordingNow(): void {
     this.tracker?.stop();
     this.tracker = null;
+    this.updateRecBadge();
     if (this.survey) {
       this.survey.recording = false;
       void surveyDb.saveSurveyMeta(this.survey);
@@ -684,7 +690,7 @@ class App {
     // screen. Photos taken here still land on the map via setPhotos.
     this.mapView.setTrack(s);
     this.mapView.setPhotos(s.photos);
-    this.recBadge.classList.toggle('on', s.recording);
+    this.updateRecBadge();
 
     const video = el('video', {
       id: 'inapp-video',
@@ -898,6 +904,22 @@ class App {
         result.candidates = pipeline.buildCandidates(fresh, result.observations);
       }
 
+      const model = analyzer instanceof OpenAIVisionAnalyzer ? analyzer.modelName : undefined;
+      for (const obs of result.observations) {
+        if (!photoIds || photoIds.includes(obs.photoId)) {
+          obs.analyzer = analyzer.name === 'openai' ? 'openai' : 'mock';
+          obs.analyzerModel = model;
+        }
+      }
+      const byId = new Map(result.observations.map((obs) => [obs.id, obs]));
+      for (const candidate of result.candidates) {
+        const sources = candidate.observationIds.map((id) => byId.get(id)?.analyzer);
+        candidate.analyzer = sources.every((source) => source === 'openai') ? 'openai'
+          : sources.every((source) => source === 'mock') ? 'mock' : 'mixed';
+        const models = [...new Set(candidate.observationIds.map((id) => byId.get(id)?.analyzerModel).filter((value): value is string => !!value))];
+        candidate.analyzerModel = models.join(', ') || undefined;
+      }
+
       await this.enrichCandidates(fresh, result.candidates);
       await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
       fresh.candidates = result.candidates;
@@ -916,7 +938,6 @@ class App {
         this.mapView.setTrack(fresh);
         this.mapView.setPhotos(fresh.photos);
         this.mapView.setCandidates(fresh.candidates);
-        this.mapView.fitToSurvey(fresh);
         this.mode = 'review';
         this.render();
         toast(`${result.candidates.length} candidate(s) created`);
@@ -1169,6 +1190,7 @@ class App {
           onchange: () => {
             this.analyzerKind = 'mock';
             this.content.dataset.analyzer = 'mock';
+            this.updateAnalysisBanner();
           }
         },
         ' Mock (offline demo)'
@@ -1187,6 +1209,7 @@ class App {
           onchange: () => {
             this.analyzerKind = 'openai';
             this.content.dataset.analyzer = 'openai';
+            this.updateAnalysisBanner();
           }
         },
         ' OpenAI vision (BYOK / proxy)'
@@ -1200,6 +1223,7 @@ class App {
       el(
         'div',
         { class: 'analysis-screen' },
+        el('div', { id: 'analysis-demo-banner', class: 'demo-banner', hidden: this.analyzerKind !== 'mock' && this.analysisResult?.analyzerName !== 'mock' }, 'MOCK / DEMO RESULT — fabricated detections; export disabled'),
         el('div', { class: 'section-title' }, 'Analyzer'),
         kindMock,
         kindOpenai,
@@ -1224,6 +1248,11 @@ class App {
 
     this.updateAnalysisProgressDom();
     this.updateAnalysisResultDom();
+  }
+
+  private updateAnalysisBanner(): void {
+    const banner = this.content.querySelector<HTMLElement>('#analysis-demo-banner');
+    if (banner) banner.hidden = this.analyzerKind !== 'mock' && this.analysisResult?.analyzerName !== 'mock';
   }
 
   /** Live batch progress (issue #2): in-place DOM update so input focus
@@ -1259,6 +1288,7 @@ class App {
     if (btn) btn.disabled = this.analyzing;
 
     const result = this.analysisResult;
+    this.updateAnalysisBanner();
     if (this.analyzing || !result) {
       box.replaceChildren();
       return;
@@ -1296,12 +1326,17 @@ class App {
     this.mapView.setTrack(s);
     this.mapView.setPhotos(s.photos);
     this.mapView.setCandidates(s.candidates);
+    requestAnimationFrame(() => {
+      if (this.mode !== 'review' || this.survey?.id !== s.id) return;
+      this.mapView.map.resize();
+      this.mapView.fitToSurvey(s);
+    });
 
     this.bottombar.replaceChildren(
       el('button', { class: 'btn', onclick: () => { this.mode = 'survey'; this.render(); } }, '← Field'),
       el('button', {
         class: 'btn primary',
-        disabled: s.candidates.length === 0,
+        disabled: s.candidates.length === 0 || s.candidates.some((c) => c.analyzer !== 'openai'),
         onclick: () => { this.mode = 'upload'; this.render(); }
       }, 'Review upload →')
     );
@@ -1318,6 +1353,9 @@ class App {
     const obsById = new Map<string, Observation>(observations.map((o) => [o.id, o]));
     const cards = s.candidates.map((c) => this.buildCandidateCard(c, photoByObs, obsById));
     this.content.replaceChildren(
+      ...(s.candidates.some((c) => c.analyzer !== 'openai')
+        ? [el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled')]
+        : []),
       el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
       ...cards
     );
@@ -1344,7 +1382,9 @@ class App {
     const cls = getFeatureClass(c.featureType);
     const card = el('div', { class: `candidate status-${c.status}` });
 
-    const img = c.observationIds.map((id) => photoByObs.get(id)?.image).find((v) => v) ?? '';
+    const evidence = c.observationIds.map((id) => obsById.get(id)).filter((o): o is Observation => !!o);
+    const first = evidence.find((o) => !!photoByObs.get(o.id)?.image);
+    const img = first ? photoByObs.get(first.id)?.image ?? '' : '';
     const thumb = el('img', { class: 'thumb', src: img || undefined, alt: 'source photo' });
 
     const statusSel = el('select', {
@@ -1361,6 +1401,24 @@ class App {
     card.append(
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? c.featureType), statusSel)
     );
+    card.append(el('div', { class: 'row' }, `Analyzer: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
+    card.append(el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
+    for (const obs of evidence) {
+      const sourceImage = photoByObs.get(obs.id)?.image;
+      if (sourceImage) {
+        const box = obs.bbox;
+        card.append(el('div', { class: 'evidence-photo' },
+          el('img', { src: sourceImage, alt: `Source photo with ${obs.featureType} detection box` }),
+          el('div', { class: 'evidence-box', style: `left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%` })
+        ));
+      }
+      card.append(el('div', { class: 'row' },
+        `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
+        `Distance: ${obs.distanceEstimate == null ? 'unknown' : `${obs.distanceEstimate.toFixed(0)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(0)} m`}`} · `,
+        `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : 'none'}`
+      ));
+      card.append(el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
+    }
 
     // Issue #9: review-only class — the OSM mapping is uncertain/ambiguous,
     // so nothing is applied automatically; the reviewer decides.
@@ -1409,13 +1467,13 @@ class App {
         c.positionUncertaintyMeters != null
           ? ` · σ ${c.positionUncertaintyMeters.toFixed(0)} m`
           : '',
-        ' ',
-        confSpan('tags', c.tagConfidence)
+        ' '
       );
     } else {
       posRow.append(el('b', {}, 'Position'), ' unknown — drag a pin or re-photograph with GPS.');
     }
     card.append(posRow);
+    card.append(el('div', { class: 'row' }, `OSM mapping: ${Object.entries(c.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'unresolved'}`));
 
     // Issue #10: the camera position and its provenance must be visible to
     // the reviewer — it is evidence for the object's location, and a
@@ -1843,6 +1901,11 @@ class App {
     const s = this.survey;
     if (!s) return;
     this.setMode('upload', 'Review upload');
+    if (s.candidates.some((c) => c.analyzer !== 'openai')) {
+      this.content.replaceChildren(el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled'));
+      this.bottombar.replaceChildren(el('button', { class: 'btn', onclick: () => { this.mode = 'review'; this.render(); } }, '← Review'));
+      return;
+    }
 
     // Export gates (issues #9/#11): geometry policy AND semantic
     // completeness are separate, explicit gates. A candidate may be

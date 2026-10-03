@@ -67,6 +67,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 
 export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
   readonly name = 'openai';
+  get modelName(): string { return this.model; }
   private readonly mode: 'direct' | 'proxy';
   private readonly endpoint: string;
   /** Bearer token actually sent in the Authorization header: the

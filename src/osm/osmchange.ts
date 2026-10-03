@@ -119,6 +119,7 @@ export function buildOsmChange(
 
   for (const c of survey.candidates) {
     if (c.status !== 'existing' || c.linkedOsmId == null) continue;
+    if (c.analyzer !== 'openai') continue;
     const type = linkedOsmType(c);
     if (type !== 'node') {
       blocked.push({ candidateId: c.id, osmType: type, osmId: c.linkedOsmId });

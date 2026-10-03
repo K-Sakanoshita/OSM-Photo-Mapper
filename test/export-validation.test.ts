@@ -9,6 +9,7 @@ function candidate(overrides: Partial<FeatureCandidate> = {}): FeatureCandidate 
   return {
     id: `cand-${n}`,
     surveyId: 's1',
+    analyzer: 'openai',
     featureType: 'bench',
     lat: 35.68,
     lon: 139.76,

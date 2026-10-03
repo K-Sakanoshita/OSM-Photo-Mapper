@@ -159,6 +159,9 @@ export interface Observation {
   id: string;
   photoId: string;
   surveyId: string;
+  /** Analyzer that produced this visual evidence. Absent on legacy data. */
+  analyzer?: 'mock' | 'openai';
+  analyzerModel?: string;
   /** Detected feature class id (see feature-classes). */
   featureType: string;
   /** Where in the image the object appears (0..1 normalized). */
@@ -280,6 +283,9 @@ export const POSITION_QUALITY_LABEL: Record<PositionQuality, string> = {
 export interface FeatureCandidate {
   id: string;
   surveyId: string;
+  /** Persisted source of every contributing observation. */
+  analyzer?: 'mock' | 'openai' | 'mixed';
+  analyzerModel?: string;
   featureType: string;
   /** Estimated position (set once analysis runs; draggable in review). */
   lat?: number;

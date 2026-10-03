@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
-import type { FeatureCandidate, GpsSample, Photo, Survey } from '../src/types';
+import type { FeatureCandidate, GpsSample, Observation, Photo, Survey } from '../src/types';
 
 /**
  * IndexedDB schema tests (issue #7) using fake-indexeddb:
@@ -329,5 +329,21 @@ describe('v1 -> v2 migration', () => {
     await surveyDb.deleteSurvey('s1');
     expect(await surveyDb.listSurveys()).toEqual([]);
     expect(await surveyDb.loadSurvey('s1')).toBeUndefined();
+  });
+});
+
+describe('analysis provenance persistence (issue #15)', () => {
+  it('retains provider and model on observations and candidates after reload', async () => {
+    const { survey, cands } = makeLegacySurvey();
+    await surveyDb.createSurvey(survey);
+    const observation: Observation = {
+      id: 'o1', photoId: 'p1', surveyId: 's1', featureType: 'bench',
+      bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
+      tagSuggestions: { amenity: 'bench' }, tagConfidence: 0.8,
+      analyzer: 'openai', analyzerModel: 'gpt-4o-mini'
+    };
+    await surveyDb.saveAnalysis('s1', [observation], [{ ...cands[0], analyzer: 'openai', analyzerModel: 'gpt-4o-mini' }]);
+    expect((await surveyDb.listObservations('s1'))[0]).toMatchObject({ analyzer: 'openai', analyzerModel: 'gpt-4o-mini' });
+    expect((await surveyDb.loadSurvey('s1'))?.candidates[0]).toMatchObject({ analyzer: 'openai', analyzerModel: 'gpt-4o-mini' });
   });
 });

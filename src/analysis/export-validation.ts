@@ -33,7 +33,7 @@ import {
 } from './feature-classes';
 
 /** Which gate blocked a candidate (absent when exportable). */
-export type ExportGate = 'geometry' | 'semantics';
+export type ExportGate = 'geometry' | 'semantics' | 'provenance';
 
 export interface CandidateExportValidation {
   exportable: boolean;
@@ -58,6 +58,9 @@ function hasValue(v: string | undefined): boolean {
  * here — their tag set is merged onto a real, already-tagged object.
  */
 export function validateCandidateExport(c: FeatureCandidate): CandidateExportValidation {
+  if (c.analyzer !== 'openai') {
+    return { exportable: false, gate: 'provenance', reason: 'Only confirmed OpenAI analysis can be exported; Mock or legacy source is unverified.' };
+  }
   // Gate 1: geometry policy (issue #9) — independent of semantics.
   const pref = geometryPreferenceFor(c.featureType);
   if (pref === 'area' || pref === 'existing-only') {
