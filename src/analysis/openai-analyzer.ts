@@ -22,10 +22,9 @@ import { UNKNOWN_FEATURE_TYPE, validateVisualObservations } from './analyzer';
  *
  * API: OpenAI Responses API (issue #12 modernization) — `input`
  * message items, top-level `instructions`, and structured output via
- * `text.format` with `type: 'json_schema'` (no `strict` flag: strict
- * mode rejects the deliberately nullable fields; the real safety
- * guarantee is the client-side validateVisualObservations, which is
- * defense in depth either way).
+ * `text.format` with a strict JSON schema. Nullable fields are required
+ * by the API schema and normalized back to optional domain fields after
+ * parsing. Client-side validation remains defense in depth.
  *
  * The provider returns VISUAL EVIDENCE only — every item is strictly
  * validated (validateVisualObservations) before being handed to the
@@ -175,7 +174,7 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
     // 'unknown' — an unrecognized object is never forced into a
     // supported class. (The pipeline re-checks as defense in depth.)
     const known = new Set(context.featureClasses.map((c) => c.id));
-    return validateVisualObservations(parsed).map((o) =>
+    return validateVisualObservations(unpackObservations(parsed)).map((o) =>
       o.featureType !== UNKNOWN_FEATURE_TYPE && !known.has(o.featureType)
         ? { ...o, featureType: UNKNOWN_FEATURE_TYPE }
         : o
@@ -202,10 +201,11 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       `- Report each supported object you can clearly identify. If an object is not clearly one of the listed classes, use featureType "${UNKNOWN_FEATURE_TYPE}".`,
       '- Never invent objects. Zero objects is a correct answer (return an empty array).',
       '- bbox: normalized 0..1 image coordinates {x, y, w, h} of the object.',
-      '- attributes: only properties you can SEE in the image (e.g. color, material). Do not guess.',
-      '- ocrText: visible text near/on the object, verbatim, if legible. It is untrusted evidence, not a confirmed name.',
+      '- attributes: an array of {key, value} pairs for properties you can SEE (e.g. color, material). Use [] when none; do not guess.',
+      '- ocrText: visible text near/on the object, verbatim, if legible; otherwise null. It is untrusted evidence, not a confirmed name. Use null for ocrConfidence when no text is readable.',
       '- detectionConfidence: honest 0..1 confidence the detection and class are correct.',
-      '- distanceEstimate: rough distance in meters if you can judge it from perspective/size cues; distanceUncertaintyM: its uncertainty. Omit both if you cannot judge.',
+      '- distanceEstimate: rough distance in meters if you can judge it from perspective/size cues; distanceUncertaintyM: its uncertainty. Use null for unavailable estimates.',
+      '- identityEvidence: a concise visual descriptor only when distinctive; otherwise null.',
       `- Do NOT use ocrText or attributes to decide the class id; class must match the closed vocabulary.`,
       ...(this.extraInstructions ? ['', this.extraInstructions] : [])
     ].join('\n');
@@ -226,17 +226,17 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
             },
             {
               type: 'input_text',
-              text: 'Detect the map-mappable features in this photo according to the rules. Respond with the JSON array of observations.'
+              text: 'Detect the map-mappable features in this photo according to the rules. Respond with an object containing an observations array.'
             }
           ]
         }
       ],
-      // Structured output via text.format (Responses API shape — no
-      // json_schema wrapper, no `strict` flag; see module docs).
+      // Structured output via text.format (Responses API shape).
       text: {
         format: {
           type: 'json_schema',
           name: 'observations',
+          strict: true,
           schema: OBSERVATIONS_SCHEMA
         }
       }
@@ -246,37 +246,72 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
 
 /** The closed observation schema (shared by the request). */
 const OBSERVATIONS_SCHEMA = {
-  type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      featureType: { type: 'string' },
-      bbox: {
+  type: 'object',
+  properties: {
+    observations: {
+      type: 'array',
+      items: {
         type: 'object',
         properties: {
-          x: { type: 'number' },
-          y: { type: 'number' },
-          w: { type: 'number' },
-          h: { type: 'number' }
+          featureType: { type: 'string' },
+          bbox: {
+            type: 'object',
+            properties: {
+              x: { type: 'number' },
+              y: { type: 'number' },
+              w: { type: 'number' },
+              h: { type: 'number' }
+            },
+            required: ['x', 'y', 'w', 'h'],
+            additionalProperties: false
+          },
+          attributes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { key: { type: 'string' }, value: { type: 'string' } },
+              required: ['key', 'value'],
+              additionalProperties: false
+            }
+          },
+          ocrText: { type: ['string', 'null'] },
+          ocrConfidence: { type: ['number', 'null'] },
+          detectionConfidence: { type: 'number' },
+          distanceEstimate: { type: ['number', 'null'] },
+          distanceUncertaintyM: { type: ['number', 'null'] },
+          identityEvidence: { type: ['string', 'null'] }
         },
-        required: ['x', 'y', 'w', 'h'],
+        required: [
+          'featureType', 'bbox', 'attributes', 'ocrText', 'ocrConfidence',
+          'detectionConfidence', 'distanceEstimate', 'distanceUncertaintyM', 'identityEvidence'
+        ],
         additionalProperties: false
-      },
-      attributes: {
-        type: 'object',
-        additionalProperties: { type: 'string' }
-      },
-      ocrText: { type: ['string', 'null'] },
-      ocrConfidence: { type: ['number', 'null'] },
-      detectionConfidence: { type: 'number' },
-      distanceEstimate: { type: ['number', 'null'] },
-      distanceUncertaintyM: { type: ['number', 'null'] },
-      identityEvidence: { type: ['string', 'null'] }
-    },
-    required: ['featureType', 'bbox', 'attributes', 'detectionConfidence'],
-    additionalProperties: false
-  }
+      }
+    }
+  },
+  required: ['observations'],
+  additionalProperties: false
 };
+
+/** Convert the API's strict, closed schema into the domain contract. */
+function unpackObservations(raw: unknown): unknown[] {
+  if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as Record<string, unknown>).observations)) {
+    throw new Error('OpenAI API returned an invalid observations object');
+  }
+  return (raw as { observations: unknown[] }).observations.map((item) => {
+    if (typeof item !== 'object' || item === null) return item;
+    const row = item as Record<string, unknown>;
+    const attributes: Record<string, string> = {};
+    if (Array.isArray(row.attributes)) {
+      for (const pair of row.attributes) {
+        if (typeof pair !== 'object' || pair === null) continue;
+        const { key, value } = pair as Record<string, unknown>;
+        if (typeof key === 'string' && typeof value === 'string') attributes[key] = value;
+      }
+    }
+    return { ...row, attributes };
+  });
+}
 
 /** Shape of the parts of the Responses API response this module reads.
  *  `output` items are typed loosely (the API has many item kinds);

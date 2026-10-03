@@ -60,7 +60,7 @@ function responsesWith(observations: unknown): string {
         id: 'msg_test',
         role: 'assistant',
         status: 'completed',
-        content: [{ type: 'output_text', text: JSON.stringify(observations) }]
+        content: [{ type: 'output_text', text: JSON.stringify({ observations }) }]
       }
     ]
   });
@@ -87,7 +87,7 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
       {
         featureType: 'bench',
         bbox: BOX,
-        attributes: { color: 'red' },
+        attributes: [{ key: 'color', value: 'red' }],
         ocrText: 'Park bench',
         ocrConfidence: 0.7,
         detectionConfidence: 0.85
@@ -128,13 +128,29 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     });
     expect(msg.content[1].type).toBe('input_text');
     expect(typeof msg.content[1].text).toBe('string');
-    // Structured output: text.format json_schema — NO `strict` flag
-    // (strict mode rejects the nullable fields; the client-side
-    // validator is the real guarantee).
+    // Structured output: the API requires a closed root object and every
+    // property required, with null for optional values.
     expect(body.text.format.type).toBe('json_schema');
     expect(body.text.format.name).toBe('observations');
-    expect(body.text.format.strict).toBeUndefined();
-    expect((body.text.format.schema as { type: string }).type).toBe('array');
+    expect(body.text.format.strict).toBe(true);
+    const schema = body.text.format.schema as {
+      type: string;
+      required: string[];
+      additionalProperties: boolean;
+      properties: { observations: { items: {
+        required: string[];
+        additionalProperties: boolean;
+        properties: Record<string, unknown> & { attributes: { items: { additionalProperties: boolean; required: string[] } } };
+      } } };
+    };
+    expect(schema.type).toBe('object');
+    expect(schema.required).toEqual(['observations']);
+    expect(schema.additionalProperties).toBe(false);
+    const item = schema.properties.observations.items;
+    expect(item.required).toEqual(Object.keys(item.properties));
+    expect(item.additionalProperties).toBe(false);
+    expect(item.properties.attributes.items.required).toEqual(['key', 'value']);
+    expect(item.properties.attributes.items.additionalProperties).toBe(false);
   });
 
   it('resolves to an empty array when the API answers "no objects"', async () => {
@@ -142,9 +158,23 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     expect(res).toEqual([]);
   });
 
+  it('normalizes nullable evidence fields and attribute pairs from strict output', async () => {
+    const res = await analyzer(stubFetch(responsesWith([{
+      featureType: 'bench', bbox: BOX,
+      attributes: [{ key: 'color', value: 'green' }],
+      ocrText: null, ocrConfidence: null,
+      detectionConfidence: 0.8,
+      distanceEstimate: null, distanceUncertaintyM: null,
+      identityEvidence: null
+    }]))).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(res).toEqual([expect.objectContaining({ featureType: 'bench', attributes: { color: 'green' } })]);
+    expect(res[0].ocrText).toBeUndefined();
+    expect(res[0].distanceEstimate).toBeUndefined();
+  });
+
   it('keeps unknown objects as "unknown" (never forced into a class)', async () => {
     const res = await analyzer(stubFetch(responsesWith([
-      { featureType: 'flying_saucer', bbox: BOX, attributes: {}, detectionConfidence: 0.9 }
+      { featureType: 'flying_saucer', bbox: BOX, attributes: [], detectionConfidence: 0.9 }
     ]))).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
     expect(res).toHaveLength(1);
     expect(res[0].featureType).toBe('unknown');
@@ -152,7 +182,7 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
 
   it('drops non-string attribute values (raw evidence stays clean)', async () => {
     const res = await analyzer(stubFetch(responsesWith([
-      { featureType: 'bench', bbox: BOX, attributes: { color: 'red', size: 42 }, detectionConfidence: 0.9 }
+      { featureType: 'bench', bbox: BOX, attributes: [{ key: 'color', value: 'red' }, { key: 'size', value: 42 }], detectionConfidence: 0.9 }
     ]))).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
     expect(res[0].attributes).toEqual({ color: 'red' });
   });
@@ -359,7 +389,7 @@ describe('proxy transport (issue #12)', () => {
     expect(msg.content[0].type).toBe('input_image');
     expect(msg.content[0].image_url).toBe('data:image/jpeg;base64,TESTDATA');
     expect(body.text.format.type).toBe('json_schema');
-    expect(body.text.format.strict).toBeUndefined();
+    expect(body.text.format.strict).toBe(true);
   });
 
   it('omits the Authorization header when no proxy token is set', async () => {
