@@ -3,7 +3,7 @@ import type { GpsSample, Photo, TimestampSource } from '../types';
 import { trackPositionAt } from '../analysis/position';
 import { surveyDb } from '../db/survey-db';
 import type { HeadingReading } from './orientation';
-import { associateCameraHeading } from './orientation';
+import { associateCameraHeading, HEADING_UNCERTAINTY_DEG } from './orientation';
 import {
   resolveCameraPosition,
   type ExifGps,
@@ -19,10 +19,15 @@ import {
  *
  * Capture time resolution (issue #6): we use the true capture timestamp when
  * available rather than the moment the user returns from the camera/file
- * picker. Preference order:
+ * picker. For EXTERNAL files the preference order is:
  *   1. EXIF DateTimeOriginal / DateTimeDigitized / DateTime  -> 'exif'
  *   2. File metadata modification time (File.lastModified)  -> 'file'
  *   3. Date.now() at selection (explicit fallback)          -> 'selected'
+ * For IN-APP camera frames (issue #13 phase 2) the frame is grabbed at
+ * the shutter moment, so the caller passes the shutter epoch ms directly
+ *  (source 'shutter') — the strongest possible timestamp, and the one
+ *  that lets the orientation reading be validated against the actual
+ *  shutter instant.
  * The source is recorded on the photo (Photo.timestampSource) so the review
  * UI can flag low-quality associations.
  *
@@ -52,7 +57,14 @@ import {
 
 export interface CapturedPhotoInput {
   surveyId: string;
-  file: File;
+  /** EXTERNAL path: the image file from the OS camera / photo library.
+   *  EXIF (capture time, GPS, image direction) is parsed from it. */
+  file?: File;
+  /** IN-APP path (issue #13 phase 2): a pre-encoded JPEG data URL
+   *  captured from the getUserMedia video at the shutter moment. When
+   *  provided, the file/EXIF path is skipped entirely (a canvas frame
+   *  has no EXIF) and `timestamp`/`timestampSource` are used as-is. */
+  image?: string;
   /** The survey's GPS track (chronological; may be empty — Record mode is
    *  optional). When the capture time is genuinely covered, its position
    *  becomes the photo's camera position with source 'track'. */
@@ -66,8 +78,23 @@ export interface CapturedPhotoInput {
    *  TIMESTAMP from the OrientationTracker. Subject to the freshness
    *  gate in `associateCameraHeading` — stale or post-return readings
    *  are rejected with an explicit headingNote. Readings without a
-   *  geographic heading (relative/none) contribute nothing. */
+   *  geographic heading (relative/none) contribute nothing.
+   *  For in-app captures this reading is taken IN THE SHUTTER GESTURE
+   *  (issue #13 phase 2), so its age at the shutter is ~0 ms and it
+   *  always passes the freshness gate when a sensor exists. */
   orientation?: HeadingReading | null;
+  /** Issue #13 phase 1: epoch ms when the external camera/file picker
+   *  was launched (the user-gesture moment, before the OS camera opened).
+   *  Orientation readings older than this are rejected as camera bearing —
+   *  they describe the pre-camera scene, not the shutter moment. Pass
+   *  undefined for in-app camera captures (orientation is read at the
+   *  shutter instant instead). */
+  pickerLaunchTs?: number;
+  /** IN-APP path only (issue #13 phase 2): the shutter-moment epoch ms,
+   *  recorded in the same gesture as the frame and orientation capture. */
+  timestamp?: number;
+  /** IN-APP path only: provenance of `timestamp` (default 'shutter'). */
+  timestampSource?: TimestampSource;
   note?: string;
 }
 
@@ -142,6 +169,57 @@ function dmsToDecimal(dms: number[]): number {
 }
 
 /**
+ * EXIF GPSImgDirection (issue #13 phase 2, C): the compass direction of
+ * the subject at the SHUTTER moment, written into the file by the camera.
+ * Unlike the device-orientation reading (which is read when the user
+ * returns to the app), the EXIF tag's timestamp IS the capture time, so
+ * it is legitimate shutter-time bearing evidence — but only as a fallback
+ * when the device orientation yielded nothing usable.
+ *
+ * exif-js naming quirk (why BOTH keys are scanned): per the EXIF spec,
+ * tag 0x0010 is GPSImgDirection (RATIONAL angle in degrees, count 1) and
+ * tag 0x0011 is GPSImgDirectionRef (ASCII 'N'/'M'/'T'). exif-js swaps
+ * the two labels: its `GPSImgDirectionRef` property holds the angle and
+ * its `GPSImgDirection` property holds the ref string. We therefore scan
+ * BOTH keys: the angle is the first finite number in [0, 360) and the
+ * ref the first N/M/T string, whichever property each ended up in.
+ * (A count-1 RATIONAL is delivered by exif-js as a plain Number; an
+ * array form is tolerated for robustness.)
+ */
+export function exifImageDirection(
+  data: ExifData | null | undefined
+): { angle: number; ref: 'N' | 'M' | 'T' | undefined; detail: string } | undefined {
+  if (!data) return undefined;
+  const values: unknown[] = [data.GPSImgDirection, data.GPSImgDirectionRef];
+  let angle: number | undefined;
+  let ref: 'N' | 'M' | 'T' | undefined;
+  for (const v of values) {
+    if (angle == null && (typeof v === 'number' || (Array.isArray(v) && typeof v[0] === 'number'))) {
+      const n = typeof v === 'number' ? v : (v[0] as number);
+      if (Number.isFinite(n) && n >= 0 && n < 360) angle = n;
+    }
+    if (ref == null && typeof v === 'string' && (v === 'N' || v === 'M' || v === 'T')) {
+      ref = v;
+    }
+  }
+  if (angle == null) return undefined;
+  return { angle, ref, detail: directionRefDetail(ref) };
+}
+
+function directionRefDetail(ref: 'N' | 'M' | 'T' | undefined): string {
+  switch (ref) {
+    case 'N':
+      return 'true-north reference';
+    case 'M':
+      return 'magnetic-north reference — local declination not corrected';
+    case 'T':
+      return 'grid-north reference — grid convergence not corrected';
+    default:
+      return 'north reference unknown (assumed true north)';
+  }
+}
+
+/**
  * Best-effort true capture time for a photo file, with provenance.
  */
 export async function resolveCaptureTime(file: File): Promise<{ timestamp: number; source: TimestampSource }> {
@@ -192,14 +270,32 @@ export async function fileToThumbnail(
 /** Capture a photo: resolve its true capture time, resolve the CAMERA
  *  position at that moment (with provenance), thumbnail it, and persist. */
 export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
-  // EXIF is read ONCE and shared by the capture-time and GPS extraction
-  // (issue #10), so the camera position and timestamp come from the same
-  // parse.
-  const exifData = await readExif(input.file);
-  const exifTime = captureTimeFromExif(exifData);
-  const lm = input.file.lastModified;
-  const timestamp = exifTime?.timestamp ?? (lm > 0 ? lm : Date.now());
-  const source: TimestampSource = exifTime ? 'exif' : lm > 0 ? 'file' : 'selected';
+  // Two capture paths (issue #13 phase 2):
+  //  - EXTERNAL file: EXIF is read ONCE and shared by the capture-time
+  //    and GPS extraction (issue #10), so the camera position and
+  //    timestamp come from the same parse.
+  //  - IN-APP image: the frame was grabbed at the shutter moment; the
+  //    caller passes the shutter timestamp directly and there is no
+  //    EXIF to parse (exifData stays empty — the EXIF fallbacks below
+  //    simply no-op).
+  let timestamp: number;
+  let source: TimestampSource;
+  let exifData: ExifData = {};
+  let image: string;
+  if (input.image) {
+    timestamp = input.timestamp ?? Date.now();
+    source = input.timestampSource ?? 'shutter';
+    image = input.image;
+  } else {
+    const file = input.file;
+    if (!file) throw new Error('capturePhoto requires a file or an image');
+    exifData = await readExif(file);
+    const exifTime = captureTimeFromExif(exifData);
+    const lm = file.lastModified;
+    timestamp = exifTime?.timestamp ?? (lm > 0 ? lm : Date.now());
+    source = exifTime ? 'exif' : lm > 0 ? 'file' : 'selected';
+    image = await fileToThumbnail(file);
+  }
 
   const cameraPosition = resolveCameraPosition({
     track: input.track,
@@ -207,7 +303,6 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
     captureFix: input.captureFix,
     exifGps: exifGpsFromData(exifData)
   });
-  const image = await fileToThumbnail(input.file);
 
   const photo: Photo = {
     id: `photo-${timestamp}-${Math.random().toString(36).slice(2, 7)}`,
@@ -242,9 +337,38 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
   // age) is recorded on Photo.cameraHeading; rejections are explained on
   // Photo.headingNote. The track's movement heading is stored separately
   // as contextual evidence and never used as the camera bearing.
-  const { cameraHeading, headingNote } = associateCameraHeading(input.orientation, timestamp);
+  const { cameraHeading, headingNote } = associateCameraHeading(
+    input.orientation,
+    timestamp,
+    input.pickerLaunchTs
+  );
   photo.cameraHeading = cameraHeading;
   photo.headingNote = headingNote;
+
+  // Issue #13 phase 2 (C): EXIF direction fallback. When the device
+  // orientation yielded no usable shutter-time bearing (rejected as
+  // stale/pre-launch/post-return, unavailable, or never captured), the
+  // EXIF GPSImgDirection tag — written by the camera AT the shutter
+  // moment — is the next-best evidence of where the lens pointed. The
+  // stale/rejection note is replaced by the EXIF provenance, because the
+  // photo now DOES carry a (fallback) camera heading.
+  if (photo.cameraHeading == null) {
+    const dir = exifImageDirection(exifData);
+    if (dir) {
+      photo.cameraHeading = {
+        bearing: dir.angle,
+        source: 'exif-direction',
+        uncertaintyDeg: HEADING_UNCERTAINTY_DEG['exif-direction'],
+        timestamp,
+        ageMs: 0,
+        detail: `EXIF GPSImgDirection (${dir.detail})`
+      };
+      photo.headingNote = undefined;
+    }
+  }
+  // Issue #13 phase 1 provenance: record when the external picker was
+  // launched, so the review UI can explain pre-launch rejections.
+  photo.pickerLaunchedAt = input.pickerLaunchTs;
   photo.movementHeading = trackPositionAt(input.track, timestamp)?.movementHeading;
 
   await surveyDb.addPhoto(input.surveyId, photo);

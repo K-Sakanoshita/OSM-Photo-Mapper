@@ -29,7 +29,11 @@ export interface GpsSample {
 }
 
 /** Where a photo's capture timestamp came from (quality marker). */
-export type TimestampSource = 'exif' | 'file' | 'selected';
+/** Where the photo's capture timestamp came from.
+ *  'shutter' = in-app camera (issue #13 phase 2): the frame was grabbed
+ *  at the shutter moment, so the timestamp IS that moment — the strongest
+ *  possible timestamp source. */
+export type TimestampSource = 'exif' | 'file' | 'selected' | 'shutter';
 
 /** Provenance of a photo's camera position (issue #10). */
 export type CameraPositionSource = 'track' | 'capture-fix' | 'exif';
@@ -60,7 +64,14 @@ export interface CameraPosition {
 
 /** Quality markers that can serve as camera-bearing evidence (issue #3).
  *  'relative' and 'none' never do — they are not geographic bearings. */
-export type CameraHeadingSource = 'compass' | 'absolute-alpha' | 'approximate';
+export type CameraHeadingSource =
+  | 'compass'
+  | 'absolute-alpha'
+  | 'approximate'
+  /** Issue #13 phase 2 (C): EXIF GPSImgDirection tag written by the
+   *  camera at the shutter moment — used only when the device-orientation
+   *  reading yielded no usable shutter-time bearing. */
+  | 'exif-direction';
 
 /**
  * Camera bearing at capture, with full quality/provenance evidence
@@ -125,6 +136,12 @@ export interface Photo {
    *  a stale or post-return orientation reading was rejected. Surfaced
    *  in the review UI so the gap is an explicit, visible fact. */
   headingNote?: string;
+  /** Issue #13 (phase 1): epoch ms when the external camera/file picker
+   *  was launched. Only set for OS-camera captures. Orientation readings
+   *  older than this moment describe the pre-camera scene, not the
+   *  composition at the shutter, and are rejected (they cannot serve as
+   *  shutter-time camera-bearing evidence). */
+  pickerLaunchedAt?: number;
   /** Free-form field note. */
   note?: string;
 }

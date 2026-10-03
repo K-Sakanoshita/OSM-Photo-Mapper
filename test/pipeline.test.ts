@@ -231,15 +231,18 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
         makePhoto('p2', { cameraHeading: ch(90) })
       ]);
       let fail = true;
+      // Both detections carry usable position evidence (distance estimate),
+      // so the merged observation set projects to the same point and the
+      // two photos describe one object (issue #2 blocker 1).
       const first = new FakeAnalyzer((p) =>
-        fail && p.id === 'p2' ? new Error('boom') : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9 })]
+        fail && p.id === 'p2' ? new Error('boom') : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10 })]
       );
       const res = await new SurveyAnalysisPipeline(first).analyze(survey);
       expect(res.photoStatuses![1].status).toBe('error');
 
       // Retry: a fresh provider run restricted to p2.
       fail = false;
-      const retry = new FakeAnalyzer(() => [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.85 })]);
+      const retry = new FakeAnalyzer(() => [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.85, distanceEstimate: 10 })]);
       const retried = await new SurveyAnalysisPipeline(retry).analyzePhotos(survey, { photoIds: ['p2'] });
       expect(retry.photos.map((p) => p.id)).toEqual(['p2']);
       expect(retried.statuses).toEqual([{ photoId: 'p2', status: 'ok', observationCount: 1 }]);
@@ -292,6 +295,114 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       );
       const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
       // Far apart in projection, but the provider says same object.
+      expect(res.candidates).toHaveLength(1);
+      expect(res.candidates[0].observationIds).toHaveLength(2);
+    });
+  });
+
+  describe('issue #2 blocker 1: no camera-position fallback; same photo stays distinct', () => {
+    it('never falls back to the camera position when a detection has no distance evidence', async () => {
+      // The old bug: with no distance estimate, projectPoint returned the
+      // CAMERA position, so every object in a photo (and every photo from
+      // the same spot) collapsed onto one point and separate objects
+      // merged into a single fake candidate. Now each such observation
+      // has NO projected point and stays its own singleton candidate.
+      const p1 = makePhoto('p1', { cameraHeading: ch(90) });
+      const p2 = makePhoto('p2', { cameraHeading: ch(90) });
+      const survey = makeSurvey([p1, p2]);
+      // One no-distance detection per photo (the analyzer runs per photo).
+      const analyzer = new FakeAnalyzer(() => [
+        vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9 }) // no distance
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      // Two SEPARATE singleton candidates — even though both cameras are
+      // at the same spot. (The candidate-level position estimate may still
+      // fall back to the capture location, but it does so with an explicit
+      // "No distance estimate" warning; the blocker is about GROUPING, which
+      // must not collapse separate objects.)
+      expect(res.observations).toHaveLength(2);
+      expect(res.candidates).toHaveLength(2);
+      for (const cand of res.candidates) {
+        expect(cand.observationIds).toHaveLength(1);
+        expect(cand.warnings.some((w) => w.includes('No distance estimate'))).toBe(true);
+      }
+    });
+
+    it('keeps same-photo detections distinct even when their projected points coincide', async () => {
+      // Two benches in ONE photo, both projecting to the identical point
+      // (same bearing + distance). Spatial proximity must NOT merge them
+      // — they are separate objects unless explicit identity evidence
+      // says otherwise.
+      const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
+      const analyzer = new FakeAnalyzer(() => [
+        vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10 }),
+        vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10 })
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.observations).toHaveLength(2);
+      expect(res.candidates).toHaveLength(2);
+    });
+  });
+
+  describe('issue #2 blocker 2: identityEvidence is SOFT evidence (geometry overrides it)', () => {
+    it('merges clusters within the identity radius even beyond the spatial radius', async () => {
+      // 25 m north vs 25 m south -> 50 m apart: beyond the 18 m spatial
+      // radius but exactly at the 50 m identity radius -> merged.
+      const p1 = makePhoto('p1', { cameraHeading: ch(0) });
+      const p2 = makePhoto('p2', { cameraHeading: ch(180) });
+      const survey = makeSurvey([p1, p2]);
+      const analyzer = new FakeAnalyzer((p) =>
+        p.id === 'p1'
+          ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
+          : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
+      );
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.candidates).toHaveLength(1);
+      expect(res.candidates[0].observationIds).toHaveLength(2);
+    });
+
+    it('does NOT merge when contradictory geometry puts the clusters beyond the identity radius', async () => {
+      // 30 m north vs 30 m south -> 60 m apart > 50 m identity radius.
+      // The identity claim is overridden by the geometry.
+      const p1 = makePhoto('p1', { cameraHeading: ch(0) });
+      const p2 = makePhoto('p2', { cameraHeading: ch(180) });
+      const survey = makeSurvey([p1, p2]);
+      const analyzer = new FakeAnalyzer((p) =>
+        p.id === 'p1'
+          ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 30, identityEvidence: 'bench-A' })]
+          : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 30, identityEvidence: 'bench-A' })]
+      );
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.candidates).toHaveLength(2);
+    });
+
+    it('does NOT merge when one cluster has no position evidence', async () => {
+      // p1's detection has a distance (projected point); p2's does not.
+      // Shared identity value is irrelevant without position evidence on
+      // BOTH sides.
+      const p1 = makePhoto('p1', { cameraHeading: ch(0) });
+      const p2 = makePhoto('p2', { cameraHeading: ch(0) });
+      const survey = makeSurvey([p1, p2]);
+      const analyzer = new FakeAnalyzer((p) =>
+        p.id === 'p1'
+          ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'bench-A' })]
+          : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, identityEvidence: 'bench-A' })]
+      );
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.candidates).toHaveLength(2);
+    });
+
+    it('allows explicit same-photo duplicate evidence via identityEvidence', async () => {
+      // Blocker 1 keeps same-photo detections distinct for PROXIMITY
+      // merging, but explicit duplicate evidence (the provider says these
+      // two detections are the same object) may still merge them when the
+      // geometry agrees (points within the identity radius).
+      const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
+      const analyzer = new FakeAnalyzer(() => [
+        vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'dup' }),
+        vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 12, identityEvidence: 'dup' })
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
       expect(res.candidates).toHaveLength(1);
       expect(res.candidates[0].observationIds).toHaveLength(2);
     });

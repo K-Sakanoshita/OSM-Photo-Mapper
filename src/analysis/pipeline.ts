@@ -58,6 +58,14 @@ export const MIN_ATTRIBUTE_CONFIDENCE = 0.7;
  *  representative are treated as the same object. */
 const CLUSTER_RADIUS_M = 18;
 
+/** Maximum distance (meters) between two projected cluster points for
+ *  shared identityEvidence to bridge them (issue #2 blocker 2). Identity
+ *  evidence is SOFT evidence: it may merge clusters beyond the spatial
+ *  radius, but contradictory geometry (clusters farther apart than this)
+ *  overrides it. Clusters without any projected point are never merged
+ *  by identity alone. */
+const IDENTITY_MERGE_RADIUS_M = 50;
+
 export interface AnalysisProgressInfo {
   /** 1-based index of the photo currently processed. */
   index: number;
@@ -162,6 +170,15 @@ export class SurveyAnalysisPipeline {
         let target: Observation[] | undefined;
         if (p) {
           for (const cluster of clusters) {
+            // Issue #2 blocker 1: detections from the SAME photo are never
+            // merged by spatial proximity — one photo can show several
+            // objects that project to (near-)identical points, and the old
+            // camera-position fallback collapsed them into one fake object.
+            // Same-photo detections stay distinct unless explicit
+            // cross-photo identity evidence says otherwise (identity merge
+            // below). Invariant: no cluster ever holds two observations
+            // from the same photo.
+            if (cluster.some((m) => m.photoId === obs.photoId)) continue;
             const rep = projectPoint(survey, cluster[0]);
             if (rep && distanceMeters(p.lat, p.lon, rep.lat, rep.lon) <= CLUSTER_RADIUS_M) {
               target = cluster;
@@ -173,10 +190,12 @@ export class SurveyAnalysisPipeline {
         else clusters.push([obs]);
       }
 
-      // Cross-photo identity evidence (issue #2): the same non-empty
-      // identityEvidence within a feature type = same object, even when
-      // the projected points are farther apart than the proximity radius.
-      clusters = mergeByIdentity(clusters);
+      // Cross-photo identity evidence (issue #2): SOFT same-object
+      // evidence from the provider. It may bridge clusters beyond the
+      // spatial radius, but only when both clusters have usable projected
+      // points within IDENTITY_MERGE_RADIUS_M — contradictory geometry
+      // overrides the identity claim (issue #2 blocker 2).
+      clusters = mergeByIdentity(survey, clusters);
 
       for (const cluster of clusters) {
         candidates.push(buildCandidate(survey, featureType, cluster));
@@ -309,51 +328,104 @@ function allowedValuesFor(
 /* Grouping + candidate building (moved out of MockAnalyzer, issue #2) */
 /* ------------------------------------------------------------------ */
 
-/** Projected point for a single observation (single-ray projection). */
+/**
+ * Projected point for a single observation (single-ray projection).
+ *
+ * Issue #2 blocker 1: the point exists ONLY when the observation carries
+ * usable position evidence — the photo's camera position AND camera
+ * heading (issue #3: device orientation only, never the movement
+ * heading) AND a positive distance estimate. There is deliberately NO
+ * fallback to the camera position: projecting a no-distance detection at
+ * the camera's own location would collapse every object in the photo
+ * onto one point and merge separate objects into a single fake cluster.
+ * Without position evidence the observation has no projected point and
+ * each such observation stays a distinct singleton candidate.
+ */
 function projectPoint(survey: Survey, obs: Observation): { lat: number; lon: number } | null {
   const photo = survey.photos.find((p) => p.id === obs.photoId);
-  if (!photo?.gps) return null;
-  // Issue #3: only the camera heading (device orientation) projects the
-  // ray; the movement heading is never used.
-  const ch = photo.cameraHeading;
-  const hasHeading = ch != null;
-  const bearing = hasHeading ? imageBearing(ch!.bearing, obs.bbox) : 0;
-  if (!hasHeading || (obs.distanceEstimate ?? 0) <= 0) {
-    return { lat: photo.gps.lat, lon: photo.gps.lon };
+  const ch = photo?.cameraHeading;
+  const dist = obs.distanceEstimate;
+  if (!photo?.gps || ch == null || dist == null || !Number.isFinite(dist) || dist <= 0) {
+    return null;
   }
-  return bearingToLatLon(photo.gps.lat, photo.gps.lon, bearing, obs.distanceEstimate!);
+  const bearing = imageBearing(ch.bearing, obs.bbox);
+  return bearingToLatLon(photo.gps.lat, photo.gps.lon, bearing, dist);
 }
 
-/** Merge clusters that share a non-empty identityEvidence value —
- *  cross-photo same-object evidence from the provider (issue #2). */
-function mergeByIdentity(clusters: Observation[][]): Observation[][] {
+/**
+ * Merge clusters that share a non-empty identityEvidence value —
+ * cross-photo same-object evidence from the provider (issue #2).
+ *
+ * Issue #2 blocker 2: identityEvidence is SOFT evidence, not a verdict.
+ * A merge happens ONLY when BOTH clusters have a usable projected point
+ * (see `projectPoint`) and those points are within IDENTITY_MERGE_RADIUS_M
+ * of each other. Contradictory geometry (projected points farther apart)
+ * overrides the identity claim; clusters without position evidence are
+ * never merged by identity alone. Merges are connected components over
+ * pairwise-compatible links (union-find), so a transitive chain only
+ * forms through steps that each pass the geometry check.
+ */
+function mergeByIdentity(survey: Survey, clusters: Observation[][]): Observation[][] {
   if (clusters.length < 2) return clusters;
-  // The non-empty identity values seen in each cluster.
-  const sets = clusters.map((cluster) => {
-    const s = new Set<string>();
+
+  // Representative projected point per cluster (first observation that
+  // has one; null when the cluster has no position evidence).
+  const repPoints = clusters.map((cluster) => {
     for (const o of cluster) {
-      if (o.identityEvidence) s.add(o.identityEvidence);
+      const p = projectPoint(survey, o);
+      if (p) return p;
     }
-    return s;
+    return null;
   });
 
-  const merged: Observation[][] = [];
-  const used = new Array(clusters.length).fill(false);
-  for (let i = 0; i < clusters.length; i++) {
-    if (used[i]) continue;
-    let acc = clusters[i];
-    used[i] = true;
-    for (let j = i + 1; j < clusters.length; j++) {
-      if (used[j]) continue;
-      const shared = [...sets[i]].some((v) => sets[j].has(v));
-      if (shared) {
-        acc = acc.concat(clusters[j]);
-        used[j] = true;
-        // Union the evidence sets so transitive merges keep working.
-        sets[j].forEach((v) => sets[i].add(v));
+  // Cluster indices per identity value.
+  const byIdentity = new Map<string, number[]>();
+  clusters.forEach((cluster, ci) => {
+    const seen = new Set<string>();
+    for (const o of cluster) {
+      const v = o.identityEvidence;
+      if (v && !seen.has(v)) {
+        seen.add(v);
+        const list = byIdentity.get(v) ?? [];
+        list.push(ci);
+        byIdentity.set(v, list);
       }
     }
-    merged.push(acc);
+  });
+
+  // Union-find over cluster indices.
+  const parent = clusters.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const union = (a: number, b: number) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  };
+
+  for (const list of byIdentity.values()) {
+    if (list.length < 2) continue;
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        const pa = repPoints[list[a]];
+        const pb = repPoints[list[b]];
+        if (!pa || !pb) continue; // no position evidence -> no merge
+        if (distanceMeters(pa.lat, pa.lon, pb.lat, pb.lon) > IDENTITY_MERGE_RADIUS_M) continue;
+        union(list[a], list[b]);
+      }
+    }
+  }
+
+  // Collect connected components.
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < clusters.length; i++) {
+    const r = find(i);
+    const g = groups.get(r) ?? [];
+    g.push(i);
+    groups.set(r, g);
+  }
+  const merged: Observation[][] = [];
+  for (const g of groups.values()) {
+    merged.push(g.flatMap((i) => clusters[i]));
   }
   return merged;
 }

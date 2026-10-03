@@ -213,6 +213,67 @@ describe('associateCameraHeading (issue #3: stale / post-return readings are rej
 });
 
 /* ------------------------------------------------------------------ */
+/* Pre-launch gate (issue #13 phase 1 / issue #3 remaining blocker)    */
+/* ------------------------------------------------------------------ */
+
+describe('associateCameraHeading pre-launch gate (issue #13 phase 1: external camera)', () => {
+  const LAUNCH = 1_000_000;
+  // Photo taken 6 s after the picker opened.
+  const CAPTURE = LAUNCH + 6_000;
+
+  function reading(partial: Partial<HeadingReading> & { heading: number }): HeadingReading {
+    return { quality: 'compass', detail: 'Compass heading', ...partial };
+  }
+
+  it('rejects a PRE-LAUNCH reading even though it is still fresh at capture time', () => {
+    // The reading was taken 4 s BEFORE the picker opened. Its age at
+    // capture is exactly ORIENT_FRESH_MS (10 s), so the freshness gate
+    // alone would let it through — the launch gate is what rejects it.
+    // While the OS camera was open the app was in the background, so a
+    // pre-launch reading describes the pre-camera scene, not the
+    // composition at the shutter moment.
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 270, timestamp: LAUNCH - 4_000 }),
+      CAPTURE,
+      LAUNCH
+    );
+    expect(cameraHeading).toBeUndefined();
+    expect(headingNote).toContain('predates camera launch');
+    expect(headingNote).toContain('4 s');
+  });
+
+  it('accepts a reading taken after launch (shutter-window evidence)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 90, timestamp: LAUNCH + 2_000 }),
+      CAPTURE,
+      LAUNCH
+    );
+    expect(headingNote).toBeUndefined();
+    expect(cameraHeading?.bearing).toBe(90);
+    expect(cameraHeading?.ageMs).toBe(4_000);
+  });
+
+  it('accepts a reading taken exactly at the launch moment', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 90, timestamp: LAUNCH }),
+      CAPTURE,
+      LAUNCH
+    );
+    expect(headingNote).toBeUndefined();
+    expect(cameraHeading?.ageMs).toBe(6_000);
+  });
+
+  it('keeps the previous behavior when no launch timestamp is passed (in-app capture)', () => {
+    const { cameraHeading, headingNote } = associateCameraHeading(
+      reading({ heading: 270, timestamp: CAPTURE - 4_000 }),
+      CAPTURE
+    );
+    expect(headingNote).toBeUndefined();
+    expect(cameraHeading?.bearing).toBe(270);
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Sideways-photography acceptance (issue #3)                          */
 /* ------------------------------------------------------------------ */
 

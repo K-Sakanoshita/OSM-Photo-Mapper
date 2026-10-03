@@ -6,6 +6,7 @@ import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
 import { capturePhoto } from './capture/photo';
+import { InAppCamera } from './capture/inapp-camera';
 import {
   requestOneShotFix,
   withTimeout,
@@ -108,11 +109,7 @@ function confSpan(kind: string, value: number): HTMLElement {
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
-type Mode = 'list' | 'survey' | 'analysis' | 'review' | 'upload';
-
-/** BYOK OpenAI key storage slot (issue #2) — used ONLY on explicit user
- *  opt-in; the key is kept in memory by default. */
-const OPENAI_KEY_STORAGE_KEY = 'osm-pm:openai-key';
+type Mode = 'list' | 'survey' | 'camera' | 'analysis' | 'review' | 'upload';
 
 class App {
   private mapView: MapView;
@@ -129,8 +126,19 @@ class App {
    *  button (user gesture — required for the iOS permission prompt); read
    *  synchronously at capture time. */
   private orientationTracker = new OrientationTracker();
+  /** Issue #13 phase 1: epoch ms when the external camera/file picker was
+   *  launched (recorded in the photo button's user gesture). Orientation
+   *  readings older than this are rejected as shutter-time camera-bearing
+   *  evidence. Cleared after each capture. */
+  private pickerLaunchTs: number | undefined = undefined;
   /** One-shot GPS fix started in the photo button's gesture (issue #10). */
   private pendingFix: Promise<OneShotFix | null> | null = null;
+  /** In-app camera (issue #13 phase 2): frame + orientation are captured
+   *  at the shutter moment. */
+  private inappCamera = new InAppCamera();
+  /** One-shot GPS fix started when the in-app camera mode was opened
+   *  (user gesture). Awaited with a short bound at the shutter. */
+  private inappFix: Promise<OneShotFix | null> | null = null;
   /** Latest live fix, used by the GPS status when not recording. */
   private liveFix: OneShotFix | null = null;
   private gpsStatus: HTMLElement;
@@ -140,13 +148,19 @@ class App {
 
   /** Issue #2: batch analysis state.
    *  analyzerKind: which ImageObservationAnalyzer runs the batch.
-   *  openaiKey: BYOK — kept in memory UNLESS the user explicitly opts in
-   *  to device persistence (openaiKeyPersist).
+   *  Issue #12: openaiMode selects the transport. 'proxy' is the
+   *  RECOMMENDED production path (the OpenAI key lives on the proxy,
+   *  never in the browser). 'direct' is EXPERIMENTAL / developer-only:
+   *  the user's own key is held in memory for this session only and is
+   *  NEVER persisted, logged, exported, or sent anywhere except the
+   *  request to api.openai.com.
    *  analysisStatuses/analysisProgress: live batch progress + per-photo
    *  errors (partial failure is visible and retryable). */
   private analyzerKind: 'mock' | 'openai' = 'mock';
+  private openaiMode: 'proxy' | 'direct' = 'proxy';
   private openaiKey = '';
-  private openaiKeyPersist = false;
+  private openaiProxyEndpoint = '';
+  private openaiProxyAuth = '';
   private openaiModel = '';
   private analysisStatuses: PhotoAnalysisStatus[] = [];
   private analysisProgress = '';
@@ -234,6 +248,9 @@ class App {
       case 'survey':
         this.renderSurveyScreen();
         break;
+      case 'camera':
+        this.renderCameraScreen();
+        break;
       case 'analysis':
         this.renderAnalysisScreen();
         break;
@@ -251,6 +268,11 @@ class App {
       case 'survey':
         this.stopRecordingNow();
         this.mode = 'list';
+        this.render();
+        break;
+      case 'camera':
+        this.stopInAppCamera();
+        this.mode = 'survey';
         this.render();
         break;
       case 'analysis':
@@ -423,6 +445,11 @@ class App {
           // Issue #3: the orientation permission (iOS) also requires a user
           // gesture, so start the tracker in this same gesture.
           this.orientationTracker.start();
+          // Issue #13 phase 1: record the picker launch moment NOW (in this
+          // user gesture) — it is the earliest instant the external camera
+          // could possibly have composed the shot. Orientation readings
+          // taken before this are pre-camera evidence, never bearing.
+          this.pickerLaunchTs = Date.now();
           photoInput.click();
         }
       },
@@ -444,7 +471,22 @@ class App {
       'Map photos'
     );
 
-    this.bottombar.replaceChildren(recBtn, camBtn, note, mapBtn, photoInput);
+    // Issue #13 phase 2: in-app camera — frame + orientation are captured
+    // at the shutter moment (only offered where getUserMedia exists).
+    const inappBtn = el(
+      'button',
+      { class: 'btn', onclick: () => void this.openInAppCamera() },
+      '📸 In-app'
+    );
+
+    this.bottombar.replaceChildren(
+      recBtn,
+      camBtn,
+      ...(InAppCamera.available() ? [inappBtn] : []),
+      note,
+      mapBtn,
+      photoInput
+    );
 
     // Issue #10: keep the GPS readiness indicator live on the field
     // screen, independent of Record mode.
@@ -570,32 +612,201 @@ class App {
         // Issue #3 blocker 1: a normalized reading WITH QUALITY replaces the
         // raw number — the estimator weights the heading by its quality.
         orientation: this.orientationTracker.read(),
+        // Issue #13 phase 1: readings older than the picker launch are
+        // pre-camera evidence and are rejected (see associateCameraHeading).
+        pickerLaunchTs: this.pickerLaunchTs,
         note: noteEl?.value.trim() || undefined
       });
+      this.pickerLaunchTs = undefined;
       s.photos.push(photo);
       this.mapView.setPhotos(s.photos);
       if (noteEl) noteEl.value = '';
-      const srcNote = photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
-      const camNote = photo.cameraPosition
-        ? ` · cam: ${describeCameraPosition(photo.cameraPosition)}`
-        : ' · no GPS — needs manual positioning';
-      // Issue #3: state the camera-bearing outcome EXPLICITLY — the
-      // bearing with its provenance, or the reason it is missing
-      // (stale / post-return / no sensor). A silent gap would hide the
-      // evidence loss.
-      let hdgNote = '';
-      if (photo.cameraHeading) {
-        const ch = photo.cameraHeading;
-        hdgNote = ` · cam hdg ${ch.bearing.toFixed(0)}° (${ch.source}, ±${ch.uncertaintyDeg}°, age ${Math.round(ch.ageMs / 1000)} s)`;
-      } else {
-        hdgNote = ` · no camera heading${photo.headingNote ? `: ${photo.headingNote}` : ''}`;
-      }
-      toast(`Photo captured (${s.photos.length})${srcNote}${camNote}${hdgNote}`);
+      // Issue #3/#13: the toast states the timestamp source, position
+      // provenance, and the bearing outcome (or why it is missing) — a
+      // silent evidence gap would hide the loss.
+      toast(this.describePhotoCaptured(photo, s.photos.length));
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
       if (mapBtn) mapBtn.disabled = false;
     } catch (e) {
       toast(`Photo failed: ${(e as Error).message}`);
     }
+  }
+
+  /** Shared post-capture toast (issue #3): states the timestamp source,
+   *  camera-position provenance, and the camera-bearing outcome (or the
+   *  explicit reason it is missing) — a silent evidence gap is a bug. */
+  private describePhotoCaptured(photo: Photo, count: number): string {
+    const srcNote =
+      photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
+    const camNote = photo.cameraPosition
+      ? ` · cam: ${describeCameraPosition(photo.cameraPosition)}`
+      : ' · no GPS — needs manual positioning';
+    let hdgNote = '';
+    if (photo.cameraHeading) {
+      const ch = photo.cameraHeading;
+      hdgNote = ` · cam hdg ${ch.bearing.toFixed(0)}° (${ch.source}, ±${ch.uncertaintyDeg}°, age ${Math.round(ch.ageMs / 1000)} s)`;
+    } else {
+      hdgNote = ` · no camera heading${photo.headingNote ? `: ${photo.headingNote}` : ''}`;
+    }
+    return `Photo captured (${count})${srcNote}${camNote}${hdgNote}`;
+  }
+
+  /* ---------------- in-app camera (issue #13, phase 2) ---------------- */
+
+  /** Open the in-app camera. Everything that needs user activation starts
+   *  in this ONE gesture: the orientation tracker (iOS permission), the
+   *  one-shot GPS fix, and the camera permission. */
+  private async openInAppCamera(): Promise<void> {
+    const s = this.survey;
+    if (!s || this.inappCamera.active) return;
+    this.orientationTracker.start();
+    this.inappFix = requestOneShotFix(15_000);
+    this.mode = 'camera';
+    this.render();
+    const video = this.content.querySelector<HTMLVideoElement>('#inapp-video');
+    if (!video) return;
+    try {
+      await this.inappCamera.start(video);
+    } catch (e) {
+      toast(`In-app camera unavailable: ${(e as Error).message}`);
+      this.stopInAppCamera();
+      this.mode = 'survey';
+      this.render();
+    }
+  }
+
+  private renderCameraScreen(): void {
+    const s = this.survey;
+    if (!s) return;
+    this.setMode('camera', s.name);
+
+    // The map is hidden in camera mode (CSS) — the viewfinder takes the
+    // screen. Photos taken here still land on the map via setPhotos.
+    this.mapView.setTrack(s);
+    this.mapView.setPhotos(s.photos);
+    this.recBadge.classList.toggle('on', s.recording);
+
+    const video = el('video', {
+      id: 'inapp-video',
+      class: 'inapp-video',
+      playsinline: true,
+      autoplay: true,
+      muted: true
+    });
+
+    // Evidence status BEFORE capture: what bearing/position will the
+    // shutter actually record? (Issue #13: make missing evidence explicit
+    // before it is lost, not after.)
+    const orReading = this.orientationTracker.read();
+    const orientLine = orReading
+      ? `Orientation: ${orReading.quality} — ${orReading.detail}`
+      : 'Orientation: no reading yet — in-app photos will lack a camera bearing';
+    const gpsLine =
+      s.gpsSamples.length > 0
+        ? `GPS: ${s.gpsSamples.length} track sample(s)` + (this.tracker ? ' (recording)' : '')
+        : 'GPS: no track — position evidence limited to the one-shot fix';
+
+    const shutterBtn = el(
+      'button',
+      {
+        id: 'shutter-btn',
+        class: 'shutter-btn',
+        'aria-label': 'Capture photo',
+        onclick: () => void this.onInAppShutter()
+      },
+      '⬤'
+    );
+
+    // Fallback to the external OS camera (file input), reusing the issue
+    // #13 phase 1 picker-launch gating of the survey screen's photo flow.
+    const photoInput = el('input', {
+      type: 'file',
+      accept: 'image/*',
+      capture: 'environment',
+      style: 'display:none',
+      onchange: () => void this.onPhotoTaken(photoInput)
+    });
+    const osCamBtn = el(
+      'button',
+      {
+        class: 'btn',
+        onclick: () => {
+          this.pendingFix = requestOneShotFix(15_000);
+          this.orientationTracker.start();
+          this.pickerLaunchTs = Date.now();
+          photoInput.click();
+        }
+      },
+      '📷 OS camera'
+    );
+    const mapBtn = el(
+      'button',
+      {
+        id: 'map-btn',
+        class: 'btn primary',
+        disabled: s.photos.length === 0,
+        onclick: () => {
+          this.mode = 'analysis';
+          this.render();
+        }
+      },
+      'Map photos'
+    );
+
+    this.content.replaceChildren(
+      video,
+      el('div', { class: 'camera-status' }, el('div', {}, orientLine), el('div', {}, gpsLine)),
+      shutterBtn
+    );
+    this.bottombar.replaceChildren(osCamBtn, mapBtn, photoInput);
+  }
+
+  /** Shutter gesture (issue #13 phase 2): timestamp, orientation reading
+   *  and the frame are all captured IN THIS moment. The orientation
+   *  reading is read synchronously first, so its freshness relative to
+   *  the shutter instant is ~0 ms and the gate trivially passes. The
+   *  one-shot fix started at mode entry is awaited with a SHORT bound —
+   *  the shutter is never held hostage by a slow GPS lock. */
+  private async onInAppShutter(): Promise<void> {
+    const s = this.survey;
+    if (!s) return;
+    const btn = this.content.querySelector<HTMLButtonElement>('#shutter-btn');
+    if (btn) btn.disabled = true;
+    try {
+      const ts = Date.now();
+      const orientation = this.orientationTracker.read();
+      const image = this.inappCamera.captureFrame(1024, 0.72);
+
+      const captureFix = this.inappFix ? await withTimeout(this.inappFix, 1500, null) : null;
+
+      const photo = await capturePhoto({
+        surveyId: s.id,
+        image,
+        timestamp: ts,
+        timestampSource: 'shutter',
+        track: s.gpsSamples,
+        captureFix,
+        orientation,
+        // In-app capture has no picker launch — the freshness gate runs
+        // against the shutter instant itself (pickerLaunchTs undefined).
+        note: undefined
+      });
+      s.photos.push(photo);
+      this.mapView.setPhotos(s.photos);
+      toast(this.describePhotoCaptured(photo, s.photos.length));
+      const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
+      if (mapBtn) mapBtn.disabled = false;
+    } catch (e) {
+      toast(`Photo failed: ${(e as Error).message}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /** Release the camera hardware and the pending fix. */
+  private stopInAppCamera(): void {
+    this.inappCamera.stop();
+    this.inappFix = null;
   }
 
   /* ---------------- analysis (issue #2) ---------------- */
@@ -604,31 +815,37 @@ class App {
    *  toast) when misconfigured — the batch does not start. */
   private createAnalyzer(): ImageObservationAnalyzer | null {
     if (this.analyzerKind === 'openai') {
+      const model = this.openaiModel.trim() || undefined;
+      if (this.openaiMode === 'proxy') {
+        // Recommended production path (issue #12): the browser talks to
+        // the user's proxy; the OpenAI key never touches the browser.
+        const endpoint = this.openaiProxyEndpoint.trim();
+        if (!endpoint) {
+          toast('Set the proxy endpoint to use the OpenAI analyzer (recommended mode)');
+          return null;
+        }
+        return new OpenAIVisionAnalyzer({
+          mode: 'proxy',
+          endpoint,
+          ...(this.openaiProxyAuth.trim() ? { proxyAuth: this.openaiProxyAuth.trim() } : {}),
+          ...(model ? { model } : {})
+        });
+      }
+      // Experimental / developer-only: the user's own key is sent from
+      // the browser to api.openai.com. In-memory for the session only —
+      // this app never stores it (issue #12).
       const key = this.openaiKey.trim();
       if (!key) {
-        toast('Enter your OpenAI API key (BYOK) to use the OpenAI analyzer');
+        toast('Enter your OpenAI API key for direct mode — or switch to the recommended proxy mode');
         return null;
       }
       return new OpenAIVisionAnalyzer({
+        mode: 'direct',
         apiKey: key,
-        ...(this.openaiModel.trim() ? { model: this.openaiModel.trim() } : {})
+        ...(model ? { model } : {})
       });
     }
     return new MockAnalyzer();
-  }
-
-  /** BYOK key storage policy (issue #2): in-memory by default;
-   *  localStorage only when the user explicitly opted in. */
-  private applyKeyStorage(): void {
-    try {
-      if (this.analyzerKind === 'openai') {
-        const key = this.openaiKey.trim();
-        if (this.openaiKeyPersist && key) localStorage.setItem(OPENAI_KEY_STORAGE_KEY, key);
-        else localStorage.removeItem(OPENAI_KEY_STORAGE_KEY);
-      }
-    } catch {
-      // Storage unavailable (private browsing): the key stays in memory.
-    }
   }
 
   /** Run the shared pipeline over the batch (issue #2). Per-photo
@@ -639,7 +856,6 @@ class App {
     if (!s || this.analyzing) return;
     const analyzer = this.createAnalyzer();
     if (!analyzer) return;
-    this.applyKeyStorage();
 
     this.analyzing = true;
     this.analysisStatuses = photoIds
@@ -811,20 +1027,55 @@ class App {
     if (!s) return;
     this.setMode('analysis', 'Map photos');
 
-    // Restore a previously persisted BYOK key (only exists if the user
-    // opted in on an earlier session).
-    if (this.analyzerKind === 'openai' && this.openaiKey === '') {
-      try {
-        const saved = localStorage.getItem(OPENAI_KEY_STORAGE_KEY);
-        if (saved) {
-          this.openaiKey = saved;
-          this.openaiKeyPersist = true;
+    // Issue #12: transport mode. The proxy is the recommended
+    // production path (the OpenAI key lives on the proxy, never in
+    // this browser); direct mode is experimental / developer-only and
+    // keeps the user's key in memory for the session only — it is
+    // never persisted, logged, or exported.
+    const modeProxy = el(
+      'input',
+      {
+        type: 'radio',
+        name: 'openai-mode',
+        value: 'proxy',
+        checked: this.openaiMode === 'proxy',
+        onchange: () => {
+          this.openaiMode = 'proxy';
+          openaiPanel.dataset.transport = 'proxy';
         }
-      } catch {
-        // ignore
-      }
-    }
-
+      },
+      ' Proxy (recommended — key stays on the server)'
+    );
+    const modeDirect = el(
+      'input',
+      {
+        type: 'radio',
+        name: 'openai-mode',
+        value: 'direct',
+        checked: this.openaiMode === 'direct',
+        onchange: () => {
+          this.openaiMode = 'direct';
+          openaiPanel.dataset.transport = 'direct';
+        }
+      },
+      ' Direct to OpenAI (experimental, developer-only)'
+    );
+    const endpointInput = el('input', {
+      type: 'url',
+      id: 'openai-proxy-endpoint',
+      class: 'note-input',
+      placeholder: 'https://your-proxy.example/responses',
+      value: this.openaiProxyEndpoint,
+      oninput: () => { this.openaiProxyEndpoint = (endpointInput as HTMLInputElement).value; }
+    });
+    const authInput = el('input', {
+      type: 'password',
+      id: 'openai-proxy-auth',
+      class: 'note-input',
+      placeholder: 'Proxy token (optional)',
+      value: this.openaiProxyAuth,
+      oninput: () => { this.openaiProxyAuth = (authInput as HTMLInputElement).value; }
+    });
     const keyInput = el('input', {
       type: 'password',
       id: 'openai-key',
@@ -841,29 +1092,34 @@ class App {
       value: this.openaiModel,
       oninput: () => { this.openaiModel = (modelInput as HTMLInputElement).value; }
     });
-    const persistChk = el('input', {
-      type: 'checkbox',
-      id: 'openai-persist',
-      checked: this.openaiKeyPersist,
-      onchange: () => { this.openaiKeyPersist = persistChk.checked; }
-    });
     const openaiPanel = el(
       'div',
       { class: 'analyzer-panel' },
-      el('div', { class: 'field' }, el('label', { for: 'openai-key' }, 'API key'), keyInput),
-      el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput),
       el(
-        'label',
-        { class: 'persist-row' },
-        persistChk,
-        ' Save key on this device (otherwise in-memory only)'
+        'div',
+        { class: 'field' },
+        el('label', { class: 'radio-row' }, modeProxy),
+        el('label', { class: 'radio-row' }, modeDirect)
       ),
       el(
         'div',
-        { class: 'hint' },
-        'Bring your own key (BYOK): it is sent only to api.openai.com and this app never stores it unless you tick the box.'
-      )
+        { class: 'transport-fields', 'data-transport': 'proxy' },
+        el('div', { class: 'field' }, el('label', { for: 'openai-proxy-endpoint' }, 'Proxy endpoint'), endpointInput),
+        el('div', { class: 'field' }, el('label', { for: 'openai-proxy-auth' }, 'Proxy token'), authInput)
+      ),
+      el(
+        'div',
+        { class: 'transport-fields', 'data-transport': 'direct' },
+        el('div', { class: 'field' }, el('label', { for: 'openai-key' }, 'API key'), keyInput),
+        el(
+          'div',
+          { class: 'hint warn' },
+          'Experimental / developer-only: this sends YOUR key from this browser to api.openai.com. It is kept in memory for this session only — never stored, logged, or exported. For production use, prefer proxy mode.'
+        )
+      ),
+      el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput)
     );
+    openaiPanel.dataset.transport = this.openaiMode;
 
     const kindMock = el(
       'label',
@@ -898,7 +1154,7 @@ class App {
             this.content.dataset.analyzer = 'openai';
           }
         },
-        ' OpenAI vision (BYOK)'
+        ' OpenAI vision (BYOK / proxy)'
       )
     );
 

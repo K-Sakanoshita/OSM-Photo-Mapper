@@ -74,6 +74,10 @@ export const HEADING_UNCERTAINTY_DEG: Record<CameraHeadingSource, number> = {
   compass: 5,
   'absolute-alpha': 5,
   approximate: 20,
+  // EXIF GPSImgDirection: the camera's own compass at shutter time — as
+  // good as the device compass, but the north reference (true/magnetic/
+  // grid) may differ from the device's convention.
+  'exif-direction': 5,
 };
 
 export const DEFAULT_HEADING_UNCERTAINTY_DEG = 10;
@@ -167,13 +171,22 @@ export const ORIENT_FRESH_MS = 10_000;
  *  - reading lacks a timestamp: freshness cannot be verified;
  *  - reading postdates the capture (post-return reading): the shutter
  *    already fired — the reading describes a different moment;
+ *  - reading predates the camera launch (issue #13 phase 1, external
+ *    camera only): while the OS camera was open the app was in the
+ *    background, so a reading taken BEFORE the picker launched describes
+ *    the pre-camera scene — rejected even if still fresh at capture;
  *  - reading older than ORIENT_FRESH_MS: stale.
  * When accepted, the result carries source, uncertainty, timestamp and
  * age so the estimator and the reviewer can see the full provenance.
+ *
+ * `pickerLaunchTs` is the moment the external camera/file picker was
+ * launched. In-app camera captures (issue #13 phase 2) read the
+ * orientation AT the shutter instant and pass no launch timestamp.
  */
 export function associateCameraHeading(
   reading: HeadingReading | null | undefined,
-  captureTimestamp: number
+  captureTimestamp: number,
+  pickerLaunchTs?: number
 ): { cameraHeading?: CameraHeading; headingNote?: string } {
   if (!reading || reading.heading == null) {
     return {
@@ -191,6 +204,12 @@ export function associateCameraHeading(
   if (reading.timestamp > captureTimestamp) {
     return {
       headingNote: `Orientation reading postdates capture by ${Math.round(reading.timestamp - captureTimestamp)} ms — post-return reading rejected`
+    };
+  }
+  if (pickerLaunchTs != null && reading.timestamp < pickerLaunchTs) {
+    const before = Math.round((pickerLaunchTs - reading.timestamp) / 1000);
+    return {
+      headingNote: `Orientation reading predates camera launch (read ${before} s before the picker opened) — not shutter-time evidence (issue #13)`
     };
   }
   const ageMs = captureTimestamp - reading.timestamp;
