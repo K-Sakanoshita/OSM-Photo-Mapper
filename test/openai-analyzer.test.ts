@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AnalysisContext } from '../src/analysis/analyzer';
 import type { OpenAIVisionConfig } from '../src/analysis/openai-analyzer';
 import { OpenAIVisionAnalyzer } from '../src/analysis/openai-analyzer';
@@ -305,6 +305,23 @@ describe('OpenAIVisionAnalyzer configuration (issue #12)', () => {
 /* ------------------------------------------------------------------ */
 
 describe('proxy transport (issue #12)', () => {
+  it('calls the default browser fetch with the global receiver', async () => {
+    const originalFetch = globalThis.fetch;
+    let called = false;
+    const browserLikeFetch = function (this: unknown): Promise<Response> {
+      if (this !== globalThis) throw new TypeError('Illegal invocation');
+      called = true;
+      return Promise.resolve(new Response(responsesWith([]), { status: 200 }));
+    } as typeof fetch;
+    vi.stubGlobal('fetch', browserLikeFetch);
+    try {
+      const a = new OpenAIVisionAnalyzer({ mode: 'proxy', endpoint: 'https://proxy.example/responses' });
+      await expect(a.analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))).resolves.toEqual([]);
+      expect(called).toBe(true);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
+  });
   function proxyAnalyzer(over: Record<string, unknown> = {}) {
     return new OpenAIVisionAnalyzer({
       mode: 'proxy',

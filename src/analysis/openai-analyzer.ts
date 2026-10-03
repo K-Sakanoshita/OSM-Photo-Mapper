@@ -103,7 +103,10 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
     }
     this.model = cfg.model?.trim() || DEFAULT_MODEL;
     this.timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.fetchImpl = cfg.fetchImpl ?? fetch;
+    // Browser fetch is a Web API method and must keep the global object as
+    // its receiver. Calling an unbound reference as this.fetchImpl() can
+    // throw "Illegal invocation" before any request reaches the proxy.
+    this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.extraInstructions = cfg.extraInstructions;
   }
 
