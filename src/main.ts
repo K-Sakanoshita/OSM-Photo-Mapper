@@ -5,7 +5,7 @@ import { MapView } from './map/map-view';
 import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
-import { capturePhoto } from './capture/photo';
+import { capturePhoto, restorePhotoGps } from './capture/photo';
 import { InAppCamera } from './capture/inapp-camera';
 import {
   requestOneShotFix,
@@ -38,7 +38,7 @@ import {
 } from './analysis/feature-classes';
 import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
-import { distanceMeters } from './analysis/position';
+import { distanceMeters, estimatePosition, rayFromPhoto } from './analysis/position';
 import { selectProvider } from './imagery/providers';
 import type {
   CandidateStatus,
@@ -1583,6 +1583,26 @@ class App {
           : ' no GPS — position needs manual placement.'
       )
     );
+    const missingGpsPhotos = [...new Map(evidence.map((obs) => {
+      const photo = photoByObs.get(obs.id);
+      return [photo?.id, photo] as const;
+    }).filter((entry): entry is readonly [string, Photo] => !!entry[0] && !!entry[1])).values()]
+      .filter((photo) => !photo.cameraPosition && !photo.gps);
+    for (const photo of missingGpsPhotos) {
+      const fileInput = el('input', {
+        type: 'file', accept: 'image/jpeg,image/*', 'aria-label': 'Select original photo to restore GPS',
+        onchange: () => {
+          const file = fileInput.files?.[0];
+          if (file) void this.onRestorePhotoGps(photo, file);
+          fileInput.value = '';
+        }
+      });
+      fileInput.style.display = 'none';
+      card.append(el('div', { class: 'row' },
+        el('button', { class: 'btn small', onclick: () => fileInput.click() }, 'Read GPS from original photo'),
+        fileInput
+      ));
+    }
 
     // Issue #3: camera-bearing evidence. Show the bearing WITH its
     // provenance (source, uncertainty, age), or an explicit, visible
@@ -1812,6 +1832,43 @@ class App {
     }
 
     return card;
+  }
+
+  private async onRestorePhotoGps(photo: Photo, file: File): Promise<void> {
+    const s = this.survey;
+    if (!s || !s.photos.some((p) => p.id === photo.id)) return;
+    try {
+      const restored = await restorePhotoGps(photo, file);
+      await surveyDb.addPhoto(s.id, restored);
+      s.photos = s.photos.map((p) => p.id === photo.id ? restored : p);
+      const observations = await surveyDb.listObservations(s.id);
+      const byId = new Map(observations.map((obs) => [obs.id, obs]));
+      for (const candidate of s.candidates) {
+        if (candidate.lat != null || candidate.lon != null || candidate.analyzer === 'manual') continue;
+        if (!candidate.observationIds.some((id) => byId.get(id)?.photoId === photo.id)) continue;
+        const rays = candidate.observationIds.flatMap((id) => {
+          const obs = byId.get(id);
+          const source = s.photos.find((p) => p.id === obs?.photoId);
+          const ray = obs && source ? rayFromPhoto(source, obs) : null;
+          return ray ? [ray] : [];
+        });
+        if (rays.length === 0) continue;
+        const estimate = estimatePosition(rays);
+        candidate.lat = estimate.lat;
+        candidate.lon = estimate.lon;
+        candidate.positionConfidence = estimate.positionConfidence;
+        candidate.positionQuality = estimate.positionQuality;
+        candidate.positionUncertaintyMeters = estimate.uncertaintyMeters;
+        candidate.warnings = candidate.warnings.filter((warning) => !warning.startsWith('No usable camera GPS position'));
+        candidate.warnings.push(...estimate.warnings);
+        await surveyDb.updateCandidate(candidate);
+      }
+      this.mapView.map.jumpTo({ center: [restored.cameraPosition!.lon, restored.cameraPosition!.lat], zoom: 18 });
+      await this.renderReviewScreen(true);
+      toast('Photo GPS restored. Check the candidate pin before uploading.');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private buildOsmMatchRow(c: FeatureCandidate, m: OsmMatch): HTMLElement {

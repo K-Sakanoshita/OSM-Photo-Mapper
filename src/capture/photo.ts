@@ -5,6 +5,7 @@ import { surveyDb } from '../db/survey-db';
 import type { HeadingReading } from './orientation';
 import { associateCameraHeading, HEADING_UNCERTAINTY_DEG } from './orientation';
 import {
+  exifCameraPosition,
   resolveCameraPosition,
   type ExifGps,
   type OneShotFix
@@ -121,6 +122,23 @@ export async function readExif(file: File): Promise<ExifData> {
     // EXIF unreadable — no EXIF data.
     return {};
   }
+}
+
+/** Restore GPS on a saved photo from its original file (thumbnails have no EXIF). */
+export async function restorePhotoGps(photo: Photo, file: File): Promise<Photo> {
+  const data = await readExif(file);
+  const gps = exifGpsFromData(data);
+  if (!gps) throw new Error('No usable GPS coordinates were found in this file. Select the original camera photo.');
+  const captureTime = captureTimeFromExif(data);
+  if (photo.timestampSource === 'exif' && captureTime && Math.abs(captureTime.timestamp - photo.timestamp) > 2000) {
+    throw new Error('This appears to be a different photo. Select the original file for this saved photo.');
+  }
+  const cameraPosition = exifCameraPosition(gps, photo.timestamp);
+  return {
+    ...photo,
+    cameraPosition,
+    gps: { id: `gps-${photo.timestamp}`, lat: gps.lat, lon: gps.lon, timestamp: photo.timestamp }
+  };
 }
 
 /**

@@ -6,15 +6,35 @@ import {
   exifGpsFromData,
   exifImageDirection,
   readExif,
+  restorePhotoGps,
   capturePhoto
 } from '../src/capture/photo';
 import type { HeadingReading } from '../src/capture/orientation';
+import type { Photo } from '../src/types';
 
 // capturePhoto persists via IndexedDB — not available in Node. The
 // persistence is orthogonal to the capture logic under test.
 vi.mock('../src/db/survey-db', () => ({
   surveyDb: { addPhoto: vi.fn(async () => undefined) }
 }));
+
+describe('restorePhotoGps', () => {
+  it('restores camera GPS from the original JPEG while retaining saved evidence', async () => {
+    const bytes = readFileSync(new URL('./fixtures/gps.jpg', import.meta.url));
+    const saved: Photo = { id: 'photo-old', surveyId: 'survey-1', timestamp: 123, image: 'saved-thumbnail' };
+    const restored = await restorePhotoGps(saved, new File([bytes], 'gps.jpg', { type: 'image/jpeg' }));
+    expect(restored.id).toBe(saved.id);
+    expect(restored.image).toBe(saved.image);
+    expect(restored.cameraPosition?.source).toBe('exif');
+    expect(restored.gps?.lat).toBeCloseTo(35.681, 5);
+    expect(restored.gps?.lon).toBeCloseTo(139.767, 5);
+  });
+
+  it('rejects a file without GPS', async () => {
+    const saved: Photo = { id: 'photo-old', surveyId: 'survey-1', timestamp: 123 };
+    await expect(restorePhotoGps(saved, new File(['not a JPEG'], 'no-gps.jpg'))).rejects.toThrow('No usable GPS');
+  });
+});
 
 describe('parseExifDateTime (issue #6: EXIF capture time)', () => {
   it('parses the standard EXIF format "YYYY:MM:DD HH:MM:SS"', () => {
