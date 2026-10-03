@@ -1,4 +1,4 @@
-import EXIF from 'exif-js';
+import exifr from 'exifr';
 import type { GpsSample, Photo, TimestampSource } from '../types';
 import { trackPositionAt } from '../analysis/position';
 import { surveyDb } from '../db/survey-db';
@@ -112,12 +112,25 @@ export function parseExifDateTime(s: unknown): number | undefined {
   return Number.isFinite(ts) ? ts : undefined;
 }
 
-type ExifData = ReturnType<typeof EXIF.readFromBinaryFile>;
+type ExifData = {
+  DateTimeOriginal?: unknown;
+  DateTimeDigitized?: unknown;
+  DateTime?: unknown;
+  GPSLatitude?: unknown;
+  GPSLatitudeRef?: unknown;
+  GPSLongitude?: unknown;
+  GPSLongitudeRef?: unknown;
+  GPSImgDirection?: unknown;
+  GPSImgDirectionRef?: unknown;
+};
 
 /** Read EXIF once per file (issue #10: capture time and GPS share one parse). */
 export async function readExif(file: File): Promise<ExifData> {
   try {
-    return EXIF.readFromBinaryFile(await file.arrayBuffer());
+    return (await exifr.parse(await file.arrayBuffer(), {
+      tiff: true, exif: true, gps: true,
+      translateValues: false, reviveValues: false
+    })) ?? {};
   } catch {
     // EXIF unreadable — no EXIF data.
     return {};
@@ -168,8 +181,8 @@ export function exifGpsFromData(data: ExifData | null | undefined): ExifGps | un
   const lonDms = data?.GPSLongitude;
   if (!Array.isArray(latDms) || !Array.isArray(lonDms)) return undefined;
   if (latDms.length < 3 || lonDms.length < 3) return undefined;
-  const lat = dmsToDecimal(latDms) * (data.GPSLatitudeRef === 'S' ? -1 : 1);
-  const lon = dmsToDecimal(lonDms) * (data.GPSLongitudeRef === 'W' ? -1 : 1);
+  const lat = dmsToDecimal(latDms) * (data?.GPSLatitudeRef === 'S' ? -1 : 1);
+  const lon = dmsToDecimal(lonDms) * (data?.GPSLongitudeRef === 'W' ? -1 : 1);
   if (
     !Number.isFinite(lat) ||
     !Number.isFinite(lon) ||
@@ -194,15 +207,10 @@ function dmsToDecimal(dms: number[]): number {
  * it is legitimate shutter-time bearing evidence — but only as a fallback
  * when the device orientation yielded nothing usable.
  *
- * exif-js naming quirk (why BOTH keys are scanned): per the EXIF spec,
- * tag 0x0010 is GPSImgDirection (RATIONAL angle in degrees, count 1) and
- * tag 0x0011 is GPSImgDirectionRef (ASCII 'N'/'M'/'T'). exif-js swaps
- * the two labels: its `GPSImgDirectionRef` property holds the angle and
- * its `GPSImgDirection` property holds the ref string. We therefore scan
- * BOTH keys: the angle is the first finite number in [0, 360) and the
- * ref the first N/M/T string, whichever property each ended up in.
- * (A count-1 RATIONAL is delivered by exif-js as a plain Number; an
- * array form is tolerated for robustness.)
+ * Scan both direction fields because older stored/test data used the
+ * exif-js labels in the opposite order. The angle is the first finite
+ * number in [0, 360) and the ref the first N/M/T string.
+ * A count-1 RATIONAL is normally a number; an array is accepted as well.
  */
 export function exifImageDirection(
   data: ExifData | null | undefined

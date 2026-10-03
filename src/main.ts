@@ -1550,7 +1550,8 @@ class App {
         ' '
       );
     } else {
-      const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps);
+      const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps)
+        || (evidence.length === 0 && this.survey?.photos.length === 1 && !!this.survey.photos[0].gps);
       posRow.append(el('b', {}, 'Position'), hasCameraGps
         ? ' unknown — camera GPS locates the photo, not the photographed object. '
         : ' unknown — no usable camera GPS was read from the photo. ');
@@ -1572,7 +1573,8 @@ class App {
     // missing/stale fix must be an explicit, visible fact.
     const cam = c.observationIds
       .map((id) => photoByObs.get(id)?.cameraPosition)
-      .find((v) => v != null);
+      .find((v) => v != null)
+      ?? (evidence.length === 0 && this.survey?.photos.length === 1 ? this.survey.photos[0].cameraPosition : undefined);
     if (c.analyzer !== 'manual') card.append(
       el(
         'div',
@@ -1588,12 +1590,18 @@ class App {
       return [photo?.id, photo] as const;
     }).filter((entry): entry is readonly [string, Photo] => !!entry[0] && !!entry[1])).values()]
       .filter((photo) => !photo.cameraPosition && !photo.gps);
+    // Analyses saved by older builds may have lost their observation rows.
+    // A one-photo survey still has an unambiguous source for GPS recovery.
+    if (c.analyzer !== 'manual' && missingGpsPhotos.length === 0 && evidence.length === 0 && this.survey?.photos.length === 1) {
+      const onlyPhoto = this.survey.photos[0];
+      if (!onlyPhoto.cameraPosition && !onlyPhoto.gps) missingGpsPhotos.push(onlyPhoto);
+    }
     for (const photo of missingGpsPhotos) {
       const fileInput = el('input', {
         type: 'file', accept: 'image/jpeg,image/*', 'aria-label': 'Select original photo to restore GPS',
-        onchange: () => {
+        onchange: async () => {
           const file = fileInput.files?.[0];
-          if (file) void this.onRestorePhotoGps(photo, file);
+          if (file) await this.onRestorePhotoGps(photo, file);
           fileInput.value = '';
         }
       });
@@ -1602,6 +1610,9 @@ class App {
         el('button', { class: 'btn small', onclick: () => fileInput.click() }, 'Read GPS from original photo'),
         fileInput
       ));
+    }
+    if (c.analyzer !== 'manual' && evidence.length === 0 && this.survey?.photos.length === 1) {
+      card.append(el('div', { class: 'row' }, 'Saved detection details are unavailable. Re-run photo analysis to estimate the object position, or place its pin on the map.'));
     }
 
     // Issue #3: camera-bearing evidence. Show the bearing WITH its
@@ -1865,7 +1876,9 @@ class App {
       }
       this.mapView.map.jumpTo({ center: [restored.cameraPosition!.lon, restored.cameraPosition!.lat], zoom: 18 });
       await this.renderReviewScreen(true);
-      toast('Photo GPS restored. Check the candidate pin before uploading.');
+      toast(observations.some((obs) => obs.photoId === photo.id)
+        ? 'Photo GPS restored. Check the candidate pin before uploading.'
+        : 'Photo GPS restored. Re-run analysis or place the object pin manually.');
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error));
     }

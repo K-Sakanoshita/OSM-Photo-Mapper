@@ -333,6 +333,19 @@ describe('v1 -> v2 migration', () => {
 });
 
 describe('analysis provenance persistence (issue #15)', () => {
+  it('retains observations when replacing an existing analysis', async () => {
+    const { survey, cands } = makeLegacySurvey();
+    await surveyDb.createSurvey(survey);
+    const makeObservation = (id: string): Observation => ({
+      id, photoId: 'p1', surveyId: 's1', featureType: 'bench',
+      bbox: { x: 0, y: 0, w: 0.1, h: 0.1 }, tagSuggestions: {}, tagConfidence: 0
+    });
+    await surveyDb.saveAnalysis('s1', [makeObservation('old')], cands);
+    await surveyDb.saveAnalysis('s1', [makeObservation('new')], [{ ...cands[0], id: 'new-candidate' }]);
+    expect((await surveyDb.listObservations('s1')).map((o) => o.id)).toEqual(['new']);
+    expect((await surveyDb.loadSurvey('s1'))?.candidates.map((c) => c.id)).toEqual(['new-candidate']);
+  });
+
   it('retains provider and model on observations and candidates after reload', async () => {
     const { survey, cands } = makeLegacySurvey();
     await surveyDb.createSurvey(survey);

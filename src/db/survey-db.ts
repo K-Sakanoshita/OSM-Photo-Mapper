@@ -247,20 +247,21 @@ export const surveyDb = {
         new Promise<void>((resolve, reject) => {
           const t = db.transaction([STORES.observations, STORES.candidates], 'readwrite');
           // Delete only this survey's rows (other surveys' data is untouched).
+          let cleared = 0;
           const clearBySurvey = (store: IDBObjectStore) => {
-            const req = store.index('by_survey').openCursor(IDBKeyRange.only(surveyId));
-            req.onsuccess = (e) => {
-              const cur = (e.target as IDBRequest<IDBCursor | null>).result;
-              if (cur) {
-                cur.delete();
-                cur.continue();
+            const req = store.index('by_survey').getAllKeys(IDBKeyRange.only(surveyId));
+            req.onsuccess = () => {
+              for (const key of req.result) store.delete(key);
+              if (++cleared === 2) {
+                // Queue new rows after both key lists are captured. A cursor
+                // can otherwise visit and delete the rows just inserted.
+                for (const o of observations) t.objectStore(STORES.observations).put(o);
+                for (const c of candidates) t.objectStore(STORES.candidates).put(c);
               }
             };
           };
           clearBySurvey(t.objectStore(STORES.observations));
           clearBySurvey(t.objectStore(STORES.candidates));
-          for (const o of observations) t.objectStore(STORES.observations).put(o);
-          for (const c of candidates) t.objectStore(STORES.candidates).put(c);
           t.oncomplete = () => resolve();
           t.onerror = () => reject(t.error);
         })
