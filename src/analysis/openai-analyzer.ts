@@ -79,6 +79,15 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
 
   constructor(cfg: OpenAIVisionConfig) {
     this.mode = cfg.mode ?? 'direct';
+    // Issue #12 (remaining blocker): a public/production build must
+    // never accept browser-side OpenAI secrets. Direct mode is
+    // developer-only and is hard-disabled in production bundles
+    // (import.meta.env.PROD is statically true in `vite build`).
+    if (this.mode === 'direct' && import.meta.env.PROD) {
+      throw new Error(
+        'Direct (browser-key) mode is disabled in this production build (issue #12) — configure a proxy endpoint instead.'
+      );
+    }
     if (this.mode === 'proxy') {
       const ep = cfg.endpoint?.trim();
       if (!ep) throw new Error('Proxy endpoint is required (proxy mode)');
@@ -129,10 +138,18 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
 
     const json = (await res.json()) as ResponsesResponse;
 
-    // A completed run can still yield no usable text (or a refusal).
     if (json.status === 'failed' || json.status === 'cancelled') {
       throw new Error(
         `OpenAI Responses run ${json.status}${json.error?.message ? `: ${json.error.message.slice(0, 300)}` : ''}`
+      );
+    }
+    // Issue #14: an incomplete run (e.g. truncated at max_output_tokens)
+    // is surfaced with its reason as a per-photo failure — the partial
+    // output is NEVER parsed.
+    if (json.status === 'incomplete') {
+      const reason = json.incomplete_details?.reason;
+      throw new Error(
+        `OpenAI Responses run incomplete${reason ? ` (${reason})` : ''} — partial output is not used`
       );
     }
 
@@ -263,28 +280,47 @@ interface ResponsesResponse {
   output?: unknown[];
 }
 
-/** Extract the assistant text from a Responses API output array.
- *  Throws on a refusal item (the run is a per-photo failure). */
+/**
+ * Extract the assistant text from a Responses API output array
+ * (issue #14 — fixed to the documented response shape).
+ *
+ * Documented shape (developers.openai.com, structured outputs):
+ * each `output` item of type `"message"` carries a `content` array
+ * whose items are:
+ *   { "type": "output_text", "text": "..." }   — generated text
+ *   { "type": "refusal", "refusal": "..." }    — safety refusal
+ *
+ * A refusal (top-level output item or inside message content) rejects
+ * — the run is a per-photo failure and the batch continues. Returns
+ * null when no output_text item is present (the caller turns that
+ * into a per-photo error).
+ */
 function extractText(json: ResponsesResponse): string | null {
   let text: string | null = null;
   for (const raw of json.output ?? []) {
     if (typeof raw !== 'object' || raw === null) continue;
     const item = raw as Record<string, unknown>;
-    if (item.type === 'refusal') {
-      const refusal = typeof item.refusal === 'string' ? item.refusal : undefined;
-      throw new Error(`OpenAI refused this image${refusal ? `: ${refusal.slice(0, 300)}` : ''}`);
-    }
+    if (item.type === 'refusal') throw refusalError(item);
     if (item.type === 'message' && Array.isArray(item.content)) {
       for (const partRaw of item.content as unknown[]) {
         if (typeof partRaw !== 'object' || partRaw === null) continue;
         const part = partRaw as Record<string, unknown>;
-        if (part.type === 'text' && typeof part.text === 'string' && (part.text as string).trim() !== '') {
+        if (part.type === 'refusal') throw refusalError(part);
+        // Generated-text item. NOTE: the documented type is
+        // "output_text" — NOT "text" (that was the bug in issue #14).
+        if (part.type === 'output_text' && typeof part.text === 'string' && (part.text as string).trim() !== '') {
           text = part.text as string;
         }
       }
     }
   }
   return text;
+}
+
+/** Refusal items carry their message in the `refusal` field. */
+function refusalError(item: Record<string, unknown>): Error {
+  const refusal = typeof item.refusal === 'string' ? item.refusal : undefined;
+  return new Error(`OpenAI refused this image${refusal ? `: ${refusal.slice(0, 300)}` : ''}`);
 }
 
 async function safeText(res: Response): Promise<string> {

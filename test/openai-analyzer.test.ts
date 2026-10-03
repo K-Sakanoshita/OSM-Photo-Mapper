@@ -35,7 +35,7 @@ let lastUrl: string | undefined;
 let lastInit: RequestInit | undefined;
 
 /** Stub fetch returning a Responses API JSON response whose first
- *  message item carries `text` (the JSON observations payload). */
+ *  message item carries `output_text` (the JSON observations payload). */
 function stubFetch(payload: string, status = 200) {
   return (async (url: string, init?: RequestInit) => {
     lastUrl = url;
@@ -44,15 +44,23 @@ function stubFetch(payload: string, status = 200) {
   }) as unknown as typeof fetch;
 }
 
-/** A completed Responses response wrapping the observations array. */
+/** A completed Responses response wrapping the observations array.
+ *  Structured on the documented raw-response shape
+ *  (developers.openai.com, structured outputs): generated text arrives
+ *  as `message.content[].type === "output_text"` — NOT "text".
+ *  (issue #14) */
 function responsesWith(observations: unknown): string {
   return JSON.stringify({
+    id: 'resp_test',
+    object: 'response',
     status: 'completed',
     output: [
       {
         type: 'message',
+        id: 'msg_test',
         role: 'assistant',
-        content: [{ type: 'text', text: JSON.stringify(observations) }]
+        status: 'completed',
+        content: [{ type: 'output_text', text: JSON.stringify(observations) }]
       }
     ]
   });
@@ -149,14 +157,26 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     expect(res[0].attributes).toEqual({ color: 'red' });
   });
 
-  it('rejects on malformed JSON text', async () => {
+  it('rejects on malformed JSON text (output_text item)', async () => {
     const payload = JSON.stringify({
       status: 'completed',
-      output: [{ type: 'message', content: [{ type: 'text', text: 'not json' }] }]
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'not json' }] }]
     });
     await expect(
       analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
     ).rejects.toThrow('malformed JSON');
+  });
+
+  it('ignores the wrong content-item type "text" (regression guard, issue #14)', async () => {
+    // If the parser ever reverts to expecting type "text", this payload
+    // contains no output_text item and must fail with "no text output".
+    const payload = JSON.stringify({
+      status: 'completed',
+      output: [{ type: 'message', content: [{ type: 'text', text: '[]' }] }]
+    });
+    await expect(
+      analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
+    ).rejects.toThrow('no text output');
   });
 
   it('rejects when the API returns no text output', async () => {
@@ -165,10 +185,24 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     ).rejects.toThrow('no text output');
   });
 
-  it('rejects on a refusal item (per-photo failure, batch continues)', async () => {
+  it('rejects on a top-level refusal output item (per-photo failure)', async () => {
     const payload = JSON.stringify({
       status: 'completed',
       output: [{ type: 'refusal', refusal: 'Content policy violation' }]
+    });
+    await expect(
+      analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
+    ).rejects.toThrow('refused');
+  });
+
+  it('rejects on a refusal inside message content (issue #14)', async () => {
+    // Refusals arrive as message-content items, not only top-level
+    // output items: { "type": "refusal", "refusal": "..." }.
+    const payload = JSON.stringify({
+      status: 'completed',
+      output: [
+        { type: 'message', role: 'assistant', content: [{ type: 'refusal', refusal: 'Content policy' }] }
+      ]
     });
     await expect(
       analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
@@ -183,6 +217,28 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     await expect(
       analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
     ).rejects.toThrow('run failed');
+  });
+
+  it('rejects a cancelled run', async () => {
+    const payload = JSON.stringify({ status: 'cancelled', error: { message: 'cancelled' } });
+    await expect(
+      analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
+    ).rejects.toThrow('run cancelled');
+  });
+
+  it('rejects an incomplete run with its reason (partial output never parsed, issue #14)', async () => {
+    const payload = JSON.stringify({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      // A partial output_text item must NOT be parsed even if present.
+      output: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '[{"featureType":"bench"' }]
+      }
+    ]
+    });
+    await expect(
+      analyzer(stubFetch(payload)).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')))
+    ).rejects.toThrow('incomplete (max_output_tokens)');
   });
 
   it('rejects on API/network errors with status and detail', async () => {

@@ -816,6 +816,15 @@ class App {
   private createAnalyzer(): ImageObservationAnalyzer | null {
     if (this.analyzerKind === 'openai') {
       const model = this.openaiModel.trim() || undefined;
+      // Issue #12 (remaining blocker): production builds are
+      // proxy-only. Direct (browser-key) mode is developer-only and
+      // must not be reachable from the public app — the analyzer
+      // constructor also hard-fails on it (defense in depth).
+      if (import.meta.env.PROD && this.openaiMode === 'direct') {
+        this.openaiMode = 'proxy';
+        toast('Direct (browser-key) mode is disabled in this build (issue #12) — use the proxy endpoint');
+        return null;
+      }
       if (this.openaiMode === 'proxy') {
         // Recommended production path (issue #12): the browser talks to
         // the user's proxy; the OpenAI key never touches the browser.
@@ -1032,34 +1041,13 @@ class App {
     // this browser); direct mode is experimental / developer-only and
     // keeps the user's key in memory for the session only — it is
     // never persisted, logged, or exported.
-    const modeProxy = el(
-      'input',
-      {
-        type: 'radio',
-        name: 'openai-mode',
-        value: 'proxy',
-        checked: this.openaiMode === 'proxy',
-        onchange: () => {
-          this.openaiMode = 'proxy';
-          openaiPanel.dataset.transport = 'proxy';
-        }
-      },
-      ' Proxy (recommended — key stays on the server)'
-    );
-    const modeDirect = el(
-      'input',
-      {
-        type: 'radio',
-        name: 'openai-mode',
-        value: 'direct',
-        checked: this.openaiMode === 'direct',
-        onchange: () => {
-          this.openaiMode = 'direct';
-          openaiPanel.dataset.transport = 'direct';
-        }
-      },
-      ' Direct to OpenAI (experimental, developer-only)'
-    );
+    //
+    // Issue #12 (remaining blocker): the PUBLIC (production) build is
+    // proxy-only — it never renders the direct-mode radio or the key
+    // field, so a browser-side OpenAI secret cannot be accepted.
+    // (import.meta.env.PROD is statically true in `vite build`; the
+    // dev server and tests keep the developer-only direct option.)
+    const isProd = import.meta.env.PROD;
     const endpointInput = el('input', {
       type: 'url',
       id: 'openai-proxy-endpoint',
@@ -1076,14 +1064,6 @@ class App {
       value: this.openaiProxyAuth,
       oninput: () => { this.openaiProxyAuth = (authInput as HTMLInputElement).value; }
     });
-    const keyInput = el('input', {
-      type: 'password',
-      id: 'openai-key',
-      class: 'note-input',
-      placeholder: 'OpenAI API key (sk-…)',
-      value: this.openaiKey,
-      oninput: () => { this.openaiKey = (keyInput as HTMLInputElement).value; }
-    });
     const modelInput = el('input', {
       type: 'text',
       id: 'openai-model',
@@ -1092,34 +1072,89 @@ class App {
       value: this.openaiModel,
       oninput: () => { this.openaiModel = (modelInput as HTMLInputElement).value; }
     });
-    const openaiPanel = el(
+    const proxyFields = el(
       'div',
-      { class: 'analyzer-panel' },
-      el(
+      { class: 'transport-fields', 'data-transport': 'proxy' },
+      el('div', { class: 'field' }, el('label', { for: 'openai-proxy-endpoint' }, 'Proxy endpoint'), endpointInput),
+      el('div', { class: 'field' }, el('label', { for: 'openai-proxy-auth' }, 'Proxy token'), authInput)
+    );
+    const modelField = el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput);
+    let openaiPanel: TagEl<'div'>;
+    if (isProd) {
+      // Public build: proxy-only, no key field (issue #12).
+      this.openaiMode = 'proxy';
+      openaiPanel = el(
         'div',
-        { class: 'field' },
-        el('label', { class: 'radio-row' }, modeProxy),
-        el('label', { class: 'radio-row' }, modeDirect)
-      ),
-      el(
-        'div',
-        { class: 'transport-fields', 'data-transport': 'proxy' },
-        el('div', { class: 'field' }, el('label', { for: 'openai-proxy-endpoint' }, 'Proxy endpoint'), endpointInput),
-        el('div', { class: 'field' }, el('label', { for: 'openai-proxy-auth' }, 'Proxy token'), authInput)
-      ),
-      el(
-        'div',
-        { class: 'transport-fields', 'data-transport': 'direct' },
-        el('div', { class: 'field' }, el('label', { for: 'openai-key' }, 'API key'), keyInput),
+        { class: 'analyzer-panel' },
         el(
           'div',
-          { class: 'hint warn' },
-          'Experimental / developer-only: this sends YOUR key from this browser to api.openai.com. It is kept in memory for this session only — never stored, logged, or exported. For production use, prefer proxy mode.'
-        )
-      ),
-      el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput)
-    );
-    openaiPanel.dataset.transport = this.openaiMode;
+          { class: 'hint' },
+          'Transport: proxy (this public build is proxy-only — issue #12). The OpenAI key stays on the proxy server and never reaches this browser. Configure your proxy endpoint below.'
+        ),
+        proxyFields,
+        modelField
+      );
+    } else {
+      const modeProxy = el(
+        'input',
+        {
+          type: 'radio',
+          name: 'openai-mode',
+          value: 'proxy',
+          checked: this.openaiMode === 'proxy',
+          onchange: () => {
+            this.openaiMode = 'proxy';
+            openaiPanel.dataset.transport = 'proxy';
+          }
+        },
+        ' Proxy (recommended — key stays on the server)'
+      );
+      const modeDirect = el(
+        'input',
+        {
+          type: 'radio',
+          name: 'openai-mode',
+          value: 'direct',
+          checked: this.openaiMode === 'direct',
+          onchange: () => {
+            this.openaiMode = 'direct';
+            openaiPanel.dataset.transport = 'direct';
+          }
+        },
+        ' Direct to OpenAI (experimental, developer-only)'
+      );
+      const keyInput = el('input', {
+        type: 'password',
+        id: 'openai-key',
+        class: 'note-input',
+        placeholder: 'OpenAI API key (sk-…)',
+        value: this.openaiKey,
+        oninput: () => { this.openaiKey = (keyInput as HTMLInputElement).value; }
+      });
+      openaiPanel = el(
+        'div',
+        { class: 'analyzer-panel' },
+        el(
+          'div',
+          { class: 'field' },
+          el('label', { class: 'radio-row' }, modeProxy),
+          el('label', { class: 'radio-row' }, modeDirect)
+        ),
+        proxyFields,
+        el(
+          'div',
+          { class: 'transport-fields', 'data-transport': 'direct' },
+          el('div', { class: 'field' }, el('label', { for: 'openai-key' }, 'API key'), keyInput),
+          el(
+            'div',
+            { class: 'hint warn' },
+            'Experimental / developer-only: this sends YOUR key from this browser to api.openai.com. It is kept in memory for this session only — never stored, logged, or exported. For production use, prefer proxy mode.'
+          )
+        ),
+        modelField
+      );
+      openaiPanel.dataset.transport = this.openaiMode;
+    }
 
     const kindMock = el(
       'label',
