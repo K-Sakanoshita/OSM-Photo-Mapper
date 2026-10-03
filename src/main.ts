@@ -1178,8 +1178,7 @@ class App {
             this.openaiMode = 'proxy';
             openaiPanel.dataset.transport = 'proxy';
           }
-        },
-        ' Proxy (recommended — key stays on the server)'
+        }
       );
       const modeDirect = el(
         'input',
@@ -1192,8 +1191,7 @@ class App {
             this.openaiMode = 'direct';
             openaiPanel.dataset.transport = 'direct';
           }
-        },
-        ' Direct to OpenAI (experimental, developer-only)'
+        }
       );
       const keyInput = el('input', {
         type: 'password',
@@ -1209,8 +1207,8 @@ class App {
         el(
           'div',
           { class: 'field' },
-          el('label', { class: 'radio-row' }, modeProxy),
-          el('label', { class: 'radio-row' }, modeDirect)
+          el('label', { class: 'radio-row' }, modeProxy, ' Proxy (recommended — key stays on the server)'),
+          el('label', { class: 'radio-row' }, modeDirect, ' Direct to OpenAI (experimental, developer-only)')
         ),
         proxyFields,
         el(
@@ -1243,9 +1241,9 @@ class App {
             this.content.dataset.analyzer = 'mock';
             this.updateAnalysisBanner();
           }
-        },
-        ' Mock (offline demo)'
-      )
+        }
+      ),
+      ' Mock (offline demo)'
     );
     const kindOpenai = el(
       'label',
@@ -1262,9 +1260,9 @@ class App {
             this.content.dataset.analyzer = 'openai';
             this.updateAnalysisBanner();
           }
-        },
-        ' OpenAI vision (BYOK / proxy)'
-      )
+        }
+      ),
+      ' OpenAI vision (BYOK / proxy)'
     );
 
     const progressBox = el('div', { id: 'analysis-progress', class: 'analysis-progress' });

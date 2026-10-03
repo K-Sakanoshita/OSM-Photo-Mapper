@@ -543,7 +543,7 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
   margin: 10px 0;
   display: none; /* shown only when the OpenAI radio is checked */
 }
-.analysis-screen[data-analyzer='openai'] .analyzer-panel { display: block; }
+#content[data-analyzer='openai'] .analyzer-panel { display: block; }
 .analyzer-panel .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .analyzer-panel .field label { font-size: 12px; color: var(--muted); }
 .analyzer-panel .hint {
