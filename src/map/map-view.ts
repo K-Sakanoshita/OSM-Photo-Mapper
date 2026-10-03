@@ -18,6 +18,7 @@ export class MapView {
   private trackSourceId = 'track-source';
   private photoLayerId = 'photos';
   private photoSourceId = 'photos-source';
+  private photoData: GeoJSON.FeatureCollection = emptyFeatureCollection();
 
   constructor(
     container: HTMLElement,
@@ -52,8 +53,9 @@ export class MapView {
         id: this.photoLayerId,
         type: 'circle',
         source: this.photoSourceId,
-        paint: { 'circle-radius': 4, 'circle-color': '#7fb3d5', 'circle-opacity': 0.9 }
+        paint: { 'circle-radius': 8, 'circle-color': '#3498db', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }
       });
+      (this.map.getSource(this.photoSourceId) as maplibregl.GeoJSONSource).setData(this.photoData);
 
       this.map.addSource(this.candidateSourceId, { type: 'geojson', data: emptyFeatureCollection() });
       this.map.addLayer({
@@ -106,10 +108,11 @@ export class MapView {
         properties: { id: p.id, timestamp: p.timestamp },
         geometry: { type: 'Point' as const, coordinates: [p.gps!.lon, p.gps!.lat] }
       }));
-    (this.map.getSource(this.photoSourceId) as maplibregl.GeoJSONSource | undefined)?.setData({
+    this.photoData = {
       type: 'FeatureCollection',
       features
-    });
+    };
+    (this.map.getSource(this.photoSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.photoData);
   }
 
   setCandidates(candidates: FeatureCandidate[]): void {
@@ -226,6 +229,7 @@ export class MapView {
   fitToSurvey(survey: Survey): void {
     const pts = [
       ...survey.gpsSamples.map((s: GpsSample) => [s.lon, s.lat] as [number, number]),
+      ...survey.photos.filter((p) => p.gps).map((p) => [p.gps!.lon, p.gps!.lat] as [number, number]),
       ...survey.candidates.filter((c) => c.lat != null).map((c) => [c.lon!, c.lat!] as [number, number])
     ];
     if (pts.length === 0) return;

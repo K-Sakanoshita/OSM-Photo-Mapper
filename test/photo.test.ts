@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   parseExifDateTime,
   captureTimeFromExif,
   exifGpsFromData,
   exifImageDirection,
+  readExif,
   capturePhoto
 } from '../src/capture/photo';
 import type { HeadingReading } from '../src/capture/orientation';
@@ -58,6 +60,14 @@ describe('captureTimeFromExif (issue #10: shared EXIF parse)', () => {
 });
 
 describe('exifGpsFromData (issue #10: EXIF GPS as lowest-precedence fallback)', () => {
+  it('reads GPS from an actual JPEG file', async () => {
+    const bytes = readFileSync(new URL('./fixtures/gps.jpg', import.meta.url));
+    const file = new File([bytes], 'gps.jpg', { type: 'image/jpeg' });
+    const gps = exifGpsFromData(await readExif(file));
+    expect(gps?.lat).toBeCloseTo(35.681, 5);
+    expect(gps?.lon).toBeCloseTo(139.767, 5);
+  });
+
   it('converts DMS rationals to decimal degrees (N/E)', () => {
     // 35°35'00.0" N, 139°45'00.0" E = 35.583333, 139.75
     const gps = exifGpsFromData({

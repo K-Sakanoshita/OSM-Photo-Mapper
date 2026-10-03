@@ -143,6 +143,7 @@ body[data-mode='camera'] #map-wrap { display: none; }
   backdrop-filter: blur(4px);
 }
 .gps-status.hidden { display: none; }
+.gps-status.gps-photo { background: rgba(26, 82, 118, 0.9); }
 .gps-status.gps-ready { background: rgba(27, 94, 32, 0.88); }
 .gps-status.gps-coarse { background: rgba(122, 91, 0, 0.88); }
 .gps-status.gps-stale { background: rgba(93, 64, 55, 0.88); }

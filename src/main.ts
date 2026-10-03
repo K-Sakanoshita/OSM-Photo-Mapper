@@ -457,6 +457,11 @@ class App {
     this.mapView.setPhotos(s.photos);
     this.mapView.setCandidates(s.candidates);
     this.updateRecBadge();
+    requestAnimationFrame(() => {
+      if (this.mode !== 'survey' || this.survey?.id !== s.id) return;
+      this.mapView.map.resize();
+      this.mapView.fitToSurvey(s);
+    });
 
     const last = s.gpsSamples[s.gpsSamples.length - 1];
     if (s.gpsSamples.length === 1 && last) {
@@ -630,8 +635,14 @@ class App {
       ? { lat: last.lat, lon: last.lon, accuracy: last.accuracy, timestamp: last.timestamp }
       : this.liveFix;
     const state = classifyGps(fix, now);
-    this.gpsStatus.textContent = formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live');
-    this.gpsStatus.className = `gps-status gps-${state}`;
+    const photoPosition = [...s.photos].reverse().find((p) => p.cameraPosition)?.cameraPosition;
+    const photoNote = photoPosition
+      ? `Photo ${describeCameraPosition(photoPosition)}: ${photoPosition.lat.toFixed(5)}, ${photoPosition.lon.toFixed(5)}`
+      : '';
+    this.gpsStatus.textContent = !fix && photoNote
+      ? `Live GPS unavailable · ${photoNote}`
+      : formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live') + (photoNote ? ` · ${photoNote}` : '');
+    this.gpsStatus.className = `gps-status gps-${!fix && photoNote ? 'photo' : state}`;
   }
 
   private async onPhotoTaken(input: HTMLInputElement): Promise<void> {
@@ -669,6 +680,8 @@ class App {
       this.pickerLaunchTs = undefined;
       s.photos.push(photo);
       this.mapView.setPhotos(s.photos);
+      if (photo.gps) this.mapView.map.jumpTo({ center: [photo.gps.lon, photo.gps.lat], zoom: 18 });
+      this.refreshGpsStatus();
       if (noteEl) noteEl.value = '';
       // Issue #3/#13: the toast states the timestamp source, position
       // provenance, and the bearing outcome (or why it is missing) — a
@@ -688,7 +701,7 @@ class App {
     const srcNote =
       photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
     const camNote = photo.cameraPosition
-      ? ` · cam: ${describeCameraPosition(photo.cameraPosition)}`
+      ? ` · cam: ${describeCameraPosition(photo.cameraPosition)} ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
       : ' · no GPS — needs manual positioning';
     let hdgNote = '';
     if (photo.cameraHeading) {
