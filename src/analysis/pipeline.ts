@@ -506,7 +506,7 @@ function buildCandidate(
       warnings.push('Position is a low-confidence estimate — verify before mapping.');
     }
   } else {
-    warnings.push('No usable GPS position for this observation.');
+    warnings.push('No usable camera GPS position for this observation. Place its pin on the map.');
   }
 
   const tags = mergeTags(cluster);

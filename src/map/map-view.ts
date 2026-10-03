@@ -12,6 +12,7 @@ export class MapView {
   map: maplibregl.Map;
   private candidateLayerId = 'candidates';
   private candidateSourceId = 'candidates-source';
+  private candidateData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private trackLayerId = 'track';
   private trackSourceId = 'track-source';
   private photoLayerId = 'photos';
@@ -117,10 +118,11 @@ export class MapView {
         },
         geometry: { type: 'Point' as const, coordinates: [c.lon!, c.lat!] }
       }));
-    (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData({
+    this.candidateData = {
       type: 'FeatureCollection',
       features
-    });
+    };
+    (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
   }
 
   /**
@@ -146,19 +148,10 @@ export class MapView {
       if (!drag) return;
       drag.lon = lng;
       drag.lat = lat;
-      void (async () => {
-        const src = this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined;
-        if (!src) return;
-        const data = (await src.getData()) as GeoJSON.FeatureCollection;
-        let found = false;
-        for (const f of data.features) {
-          if (f.properties?.id === drag?.id) {
-            (f.geometry as GeoJSON.Point).coordinates = [lng, lat];
-            found = true;
-          }
-        }
-        if (found) src.setData(data);
-      })();
+      const feature = this.candidateData.features.find((f) => f.properties?.id === drag?.id);
+      if (!feature) return;
+      (feature.geometry as GeoJSON.Point).coordinates = [lng, lat];
+      (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
     };
 
     const endDrag = (): void => {

@@ -148,6 +148,7 @@ class App {
   private gpsTickTimer: number | undefined;
   private analyzing = false;
   private placingCandidate = false;
+  private placingExistingCandidateId: string | null = null;
 
   /** Issue #2: batch analysis state.
    *  analyzerKind: which ImageObservationAnalyzer runs the batch.
@@ -1372,7 +1373,7 @@ class App {
 
   /* ---------------- review screen ---------------- */
 
-  private async renderReviewScreen(): Promise<void> {
+  private async renderReviewScreen(preserveMapView = false): Promise<void> {
     const s = this.survey;
     if (!s) return;
     this.setMode('review', 'Review candidates');
@@ -1383,7 +1384,7 @@ class App {
     requestAnimationFrame(() => {
       if (this.mode !== 'review' || this.survey?.id !== s.id) return;
       this.mapView.map.resize();
-      this.mapView.fitToSurvey(s);
+      if (!preserveMapView) this.mapView.fitToSurvey(s);
     });
 
     this.bottombar.replaceChildren(
@@ -1403,9 +1404,10 @@ class App {
       el('div', { class: 'manual-placement' },
         el('button', { class: 'btn', onclick: () => {
           this.placingCandidate = !this.placingCandidate;
+          this.placingExistingCandidateId = null;
           this.render();
         } }, this.placingCandidate ? 'Cancel pin placement' : '+ Add pin on map'),
-        el('span', {}, this.placingCandidate ? 'Tap the map where the object is located.' : 'Add an object manually if analysis found no candidate.')
+        el('span', {}, this.placingExistingCandidateId ? 'Tap the map to place the selected candidate.' : this.placingCandidate ? 'Tap the map where the object is located.' : 'Add an object manually if analysis found no candidate.')
       ),
       ...(s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual')
         ? [el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled')]
@@ -1535,7 +1537,17 @@ class App {
         ' '
       );
     } else {
-      posRow.append(el('b', {}, 'Position'), ' unknown — drag a pin or re-photograph with GPS.');
+      const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps);
+      posRow.append(el('b', {}, 'Position'), hasCameraGps
+        ? ' unknown — camera GPS locates the photo, not the photographed object. '
+        : ' unknown — no usable camera GPS was read from the photo. ',
+        el('button', { class: 'btn small', onclick: () => {
+          this.placingCandidate = false;
+          this.placingExistingCandidateId = this.placingExistingCandidateId === c.id ? null : c.id;
+          const photo = c.observationIds.map((id) => photoByObs.get(id)).find((p) => p?.gps);
+          if (photo?.gps) this.mapView.map.jumpTo({ center: [photo.gps.lon, photo.gps.lat], zoom: 18 });
+          this.renderReviewScreen(true);
+        } }, this.placingExistingCandidateId === c.id ? 'Cancel placement' : 'Place pin on map'));
     }
     card.append(posRow);
     card.append(el('div', { class: 'row' }, `OSM mapping: ${Object.entries(c.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'unresolved'}`));
@@ -1908,14 +1920,23 @@ class App {
     if (!c.warnings.includes('Position set manually by reviewer.')) {
       c.warnings.push('Position set manually by reviewer.');
     }
+    c.warnings = c.warnings.filter((warning) => !warning.startsWith('No usable camera GPS position for this observation.'));
     await surveyDb.updateCandidate(c);
     this.mapView.setCandidates(s.candidates);
+    if (this.mode === 'review') void this.renderReviewScreen(true);
     toast('Pin moved');
   }
 
   private async onMapSelected(lat: number, lon: number): Promise<void> {
     const s = this.survey;
-    if (!this.placingCandidate || this.mode !== 'review' || !s) return;
+    if (this.mode !== 'review' || !s) return;
+    if (this.placingExistingCandidateId) {
+      const id = this.placingExistingCandidateId;
+      this.placingExistingCandidateId = null;
+      await this.onPinDragged(id, lat, lon);
+      return;
+    }
+    if (!this.placingCandidate) return;
     this.placingCandidate = false;
     const c: FeatureCandidate = {
       id: crypto.randomUUID(), surveyId: s.id, analyzer: 'manual', featureType: 'manual',
