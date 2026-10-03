@@ -3,9 +3,11 @@ import type { AnalysisContext, ImageObservationAnalyzer, VisualObservation } fro
 import {
   MIN_ATTRIBUTE_CONFIDENCE,
   MIN_DETECTION_CONFIDENCE,
-  SurveyAnalysisPipeline
+  SurveyAnalysisPipeline,
+  type CropHasher
 } from '../src/analysis/pipeline';
 import type { CameraHeading, Photo, Survey } from '../src/types';
+import type { VisualObservation } from '../src/analysis/analyzer';
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -54,6 +56,15 @@ function makeSurvey(photos: Photo[]): Survey {
     candidates: []
   };
 }
+
+/** Deterministic fake crop hasher (issue #2 blocker 2): the test
+ *  decides which 64-bit hash each detection's crop carries. */
+function fixedHasher(fn: (photo: Photo, vis: VisualObservation) => string | null): CropHasher {
+  return async (photo, vis) => fn(photo, vis);
+}
+
+const HASH_A = 'aaaaaaaaaaaaaaaa';
+const HASH_B = 'bbbbbbbbbbbbbbbb'; // hamming distance to A: 32 > 12
 
 /**
  * Deterministic fake provider. The per-photo result is deliberately
@@ -284,17 +295,18 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       expect(res.candidates).toHaveLength(2);
     });
 
-    it('merges distant clusters that share identityEvidence', async () => {
+    it('merges distant clusters whose crops are perceptually identical', async () => {
       const p1 = makePhoto('p1', { cameraHeading: ch(0) });
       const p2 = makePhoto('p2', { cameraHeading: ch(180) });
       const survey = makeSurvey([p1, p2]);
-      const analyzer = new FakeAnalyzer((p) =>
-        p.id === 'p1'
-          ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'bench-A' })]
-          : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'bench-A' })]
+      const analyzer = new FakeAnalyzer(() =>
+        [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'bench-A' })]
       );
-      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
-      // Far apart in projection, but the provider says same object.
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher(() => HASH_A)
+      });
+      // Far apart in projection, but the CROPS look the same (identical
+      // perceptual hash) and the geometry agrees -> same object.
       expect(res.candidates).toHaveLength(1);
       expect(res.candidates[0].observationIds).toHaveLength(2);
     });
@@ -344,41 +356,43 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
     });
   });
 
-  describe('issue #2 blocker 2: identityEvidence is SOFT evidence (geometry overrides it)', () => {
-    it('merges clusters within the identity radius even beyond the spatial radius', async () => {
+  describe('issue #2 blocker 2: cross-photo merges need a REAL visual match (crop hash)', () => {
+    it('merges clusters within the evidence radius even beyond the spatial radius', async () => {
       // 25 m north vs 25 m south -> 50 m apart: beyond the 18 m spatial
-      // radius but exactly at the 50 m identity radius -> merged.
+      // radius but exactly at the 50 m evidence radius, and the crops
+      // are perceptually identical -> merged.
       const p1 = makePhoto('p1', { cameraHeading: ch(0) });
       const p2 = makePhoto('p2', { cameraHeading: ch(180) });
       const survey = makeSurvey([p1, p2]);
-      const analyzer = new FakeAnalyzer((p) =>
-        p.id === 'p1'
-          ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
-          : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
+      const analyzer = new FakeAnalyzer(() =>
+        [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
       );
-      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher(() => HASH_A)
+      });
       expect(res.candidates).toHaveLength(1);
       expect(res.candidates[0].observationIds).toHaveLength(2);
     });
 
-    it('does NOT merge when contradictory geometry puts the clusters beyond the identity radius', async () => {
-      // 30 m north vs 30 m south -> 60 m apart > 50 m identity radius.
-      // The identity claim is overridden by the geometry.
+    it('does NOT merge when contradictory geometry puts the clusters beyond the evidence radius', async () => {
+      // 30 m north vs 30 m south -> 60 m apart > 50 m evidence radius.
+      // Even with identical crop hashes, the geometry overrides the
+      // visual claim.
       const p1 = makePhoto('p1', { cameraHeading: ch(0) });
       const p2 = makePhoto('p2', { cameraHeading: ch(180) });
       const survey = makeSurvey([p1, p2]);
-      const analyzer = new FakeAnalyzer((p) =>
-        p.id === 'p1'
-          ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 30, identityEvidence: 'bench-A' })]
-          : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 30, identityEvidence: 'bench-A' })]
+      const analyzer = new FakeAnalyzer(() =>
+        [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 30, identityEvidence: 'bench-A' })]
       );
-      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher(() => HASH_A)
+      });
       expect(res.candidates).toHaveLength(2);
     });
 
     it('does NOT merge when one cluster has no position evidence', async () => {
       // p1's detection has a distance (projected point); p2's does not.
-      // Shared identity value is irrelevant without position evidence on
+      // Identical crop hashes are irrelevant without position evidence on
       // BOTH sides.
       const p1 = makePhoto('p1', { cameraHeading: ch(0) });
       const p2 = makePhoto('p2', { cameraHeading: ch(0) });
@@ -388,23 +402,62 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
           ? [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'bench-A' })]
           : [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, identityEvidence: 'bench-A' })]
       );
-      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher(() => HASH_A)
+      });
       expect(res.candidates).toHaveLength(2);
     });
 
-    it('allows explicit same-photo duplicate evidence via identityEvidence', async () => {
-      // Blocker 1 keeps same-photo detections distinct for PROXIMITY
-      // merging, but explicit duplicate evidence (the provider says these
-      // two detections are the same object) may still merge them when the
-      // geometry agrees (points within the identity radius).
+    it('does NOT merge distinct objects that happen to share an identity label', async () => {
+      // THE blocker-2 regression: two distinct benches in two photos
+      // where the provider emitted the SAME free-form identity label
+      // ('bench-A') for both. The labels must not merge them — only the
+      // actual crops decide, and here the crops are perceptually
+      // different (hamming distance 32 > 12).
+      const p1 = makePhoto('p1', { cameraHeading: ch(0) });
+      const p2 = makePhoto('p2', { cameraHeading: ch(180) });
+      const survey = makeSurvey([p1, p2]);
+      const analyzer = new FakeAnalyzer(() =>
+        [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
+      );
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher((photo) => (photo.id === 'p1' ? HASH_A : HASH_B))
+      });
+      // Shared label + agreeing geometry, but different pixels -> two
+      // separate candidates.
+      expect(res.candidates).toHaveLength(2);
+    });
+
+    it('does NOT merge when one photo could not be hashed (no visual evidence)', async () => {
+      // p2's image is undecodable -> null hash -> that cluster can never
+      // be merged across photos, even with a shared label and close
+      // geometry.
+      const p1 = makePhoto('p1', { cameraHeading: ch(0) });
+      const p2 = makePhoto('p2', { cameraHeading: ch(180) });
+      const survey = makeSurvey([p1, p2]);
+      const analyzer = new FakeAnalyzer(() =>
+        [vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 25, identityEvidence: 'bench-A' })]
+      );
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher((photo) => (photo.id === 'p1' ? HASH_A : null))
+      });
+      expect(res.candidates).toHaveLength(2);
+    });
+
+    it('never merges same-photo detections, even with matching crop hashes', async () => {
+      // Two detections in ONE photo, close in projection, same class and
+      // even the same crop hash and identity label: they are still
+      // separate objects. Provider/visual evidence labels never merge
+      // same-photo detections (issue #2).
       const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
       const analyzer = new FakeAnalyzer(() => [
         vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 10, identityEvidence: 'dup' }),
         vis({ featureType: 'bench', bbox: BOX, detectionConfidence: 0.9, distanceEstimate: 12, identityEvidence: 'dup' })
       ]);
-      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
-      expect(res.candidates).toHaveLength(1);
-      expect(res.candidates[0].observationIds).toHaveLength(2);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
+        cropHasher: fixedHasher(() => HASH_A)
+      });
+      expect(res.candidates).toHaveLength(2);
     });
   });
 

@@ -12,6 +12,7 @@ import type {
   VisualObservation
 } from './analyzer';
 import { UNKNOWN_FEATURE_TYPE, validateVisualObservations } from './analyzer';
+import { cropHashFromDataUrl, hashesMatch, type CropHash } from './crop-hash';
 import {
   FEATURE_CLASSES,
   defaultTagsFor,
@@ -58,13 +59,13 @@ export const MIN_ATTRIBUTE_CONFIDENCE = 0.7;
  *  representative are treated as the same object. */
 const CLUSTER_RADIUS_M = 18;
 
-/** Maximum distance (meters) between two projected cluster points for
- *  shared identityEvidence to bridge them (issue #2 blocker 2). Identity
- *  evidence is SOFT evidence: it may merge clusters beyond the spatial
- *  radius, but contradictory geometry (clusters farther apart than this)
- *  overrides it. Clusters without any projected point are never merged
- *  by identity alone. */
-const IDENTITY_MERGE_RADIUS_M = 50;
+/** Maximum distance (meters) between two projected cluster points that a
+ *  cross-photo visual match (crop hash) may bridge (issue #2 blocker 2).
+ *  Geometry is a NECESSARY condition: a visual match only bridges
+ *  clusters whose projected points agree within this radius, and
+ *  clusters without any projected point are never merged by evidence
+ *  alone. */
+const EVIDENCE_MERGE_RADIUS_M = 50;
 
 export interface AnalysisProgressInfo {
   /** 1-based index of the photo currently processed. */
@@ -80,7 +81,18 @@ export interface AnalyzeOptions {
   photoIds?: string[];
   /** Live per-photo progress callback (UI batch progress). */
   onProgress?: (info: AnalysisProgressInfo) => void;
+  /**
+   * Cross-photo visual matcher (issue #2 blocker 2): computes the
+   * perceptual hash of a detection's crop. Defaults to hashing the
+   * photo's image data URL in the browser; tests inject a deterministic
+   * fake. A null result means "no visual evidence" — the observation
+   * can never be merged across photos by identity.
+   */
+  cropHasher?: CropHasher;
 }
+
+/** Computes the 64-bit crop hash for one detection (null on failure). */
+export type CropHasher = (photo: Photo, vis: VisualObservation) => Promise<CropHash | null>;
 
 export interface PhotoAnalysisOutcome {
   observations: Observation[];
@@ -117,6 +129,9 @@ export class SurveyAnalysisPipeline {
 
     const observations: Observation[] = [];
     const statuses: PhotoAnalysisStatus[] = [];
+    // Issue #2 blocker 2: real visual evidence for cross-photo grouping.
+    const hasher: CropHasher =
+      opts.cropHasher ?? ((p, vis) => (p.image ? cropHashFromDataUrl(p.image, vis.bbox) : Promise.resolve(null)));
 
     for (let i = 0; i < photos.length; i++) {
       const photo = photos[i];
@@ -128,7 +143,17 @@ export class SurveyAnalysisPipeline {
         const obs: Observation[] = [];
         for (let j = 0; j < valid.length; j++) {
           const o = toObservation(survey.id, photo, valid[j], j);
-          if (o) obs.push(o);
+          if (o) {
+            // Perceptual hash of the cropped detection region. Any
+            // failure (undecodable image, no canvas) yields null — the
+            // observation then simply carries no visual evidence.
+            // The hasher (default or injected) decides whether it can
+            // produce a value; the default one returns null for photos
+            // without image data.
+            const h = await hasher(photo, valid[j]);
+            if (h) o.cropHash = h;
+            obs.push(o);
+          }
         }
         observations.push(...obs);
         status = { photoId: photo.id, status: 'ok', observationCount: obs.length };
@@ -148,7 +173,8 @@ export class SurveyAnalysisPipeline {
 
   /**
    * Group validated observations into candidates: same feature type +
-   * projected proximity (and identical identityEvidence) = same object.
+   * projected proximity = same object; cross-photo merges additionally
+   * require a perceptual-hash (crop) visual match (issue #2 blocker 2).
    * Pure and provider-agnostic — safe to re-run on merged observation
    * sets after a retry.
    */
@@ -190,12 +216,13 @@ export class SurveyAnalysisPipeline {
         else clusters.push([obs]);
       }
 
-      // Cross-photo identity evidence (issue #2): SOFT same-object
-      // evidence from the provider. It may bridge clusters beyond the
-      // spatial radius, but only when both clusters have usable projected
-      // points within IDENTITY_MERGE_RADIUS_M — contradictory geometry
-      // overrides the identity claim (issue #2 blocker 2).
-      clusters = mergeByIdentity(survey, clusters);
+      // Cross-photo same-object evidence (issue #2 blocker 2): a
+      // perceptual-hash match of the cropped detection regions may
+      // bridge clusters beyond the spatial radius, but ONLY when both
+      // clusters have usable projected points within
+      // EVIDENCE_MERGE_RADIUS_M and come from different photos —
+      // contradictory geometry overrides the visual claim.
+      clusters = mergeByVisualEvidence(survey, clusters);
 
       for (const cluster of clusters) {
         candidates.push(buildCandidate(survey, featureType, cluster));
@@ -353,19 +380,31 @@ function projectPoint(survey: Survey, obs: Observation): { lat: number; lon: num
 }
 
 /**
- * Merge clusters that share a non-empty identityEvidence value —
- * cross-photo same-object evidence from the provider (issue #2).
+ * Merge clusters that show the SAME physical object (issue #2 blocker 2).
  *
- * Issue #2 blocker 2: identityEvidence is SOFT evidence, not a verdict.
- * A merge happens ONLY when BOTH clusters have a usable projected point
- * (see `projectPoint`) and those points are within IDENTITY_MERGE_RADIUS_M
- * of each other. Contradictory geometry (projected points farther apart)
- * overrides the identity claim; clusters without position evidence are
- * never merged by identity alone. Merges are connected components over
+ * Free-form provider `identityEvidence` strings are deliberately NOT
+ * used for merging: they originate from independent per-photo provider
+ * runs and can collide for two distinct same-class objects. Instead the
+ * actual pixels of the detected regions are compared — a merge happens
+ * ONLY when ALL of the following hold:
+ *
+ *  - both clusters have a usable projected point (see `projectPoint`)
+ *    and those points are within EVIDENCE_MERGE_RADIUS_M of each other
+ *    (geometry is a NECESSARY condition; clusters without position
+ *    evidence are never merged by evidence alone);
+ *  - the clusters come from DIFFERENT photos (same-photo detections are
+ *    never merged by evidence labels — one photo can show several
+ *    similar objects);
+ *  - there is at least one pairwise crop-hash match: some observation in
+ *    cluster A and some observation in cluster B have perceptually
+ *    identical crops (hamming distance <= HASH_MERGE_MAX_HAMMING).
+ *
+ * A cluster whose image could not be hashed (no cropHash) can never be
+ * merged across photos. Merges are connected components over
  * pairwise-compatible links (union-find), so a transitive chain only
- * forms through steps that each pass the geometry check.
+ * forms through steps that each pass all three checks.
  */
-function mergeByIdentity(survey: Survey, clusters: Observation[][]): Observation[][] {
+function mergeByVisualEvidence(survey: Survey, clusters: Observation[][]): Observation[][] {
   if (clusters.length < 2) return clusters;
 
   // Representative projected point per cluster (first observation that
@@ -378,20 +417,10 @@ function mergeByIdentity(survey: Survey, clusters: Observation[][]): Observation
     return null;
   });
 
-  // Cluster indices per identity value.
-  const byIdentity = new Map<string, number[]>();
-  clusters.forEach((cluster, ci) => {
-    const seen = new Set<string>();
-    for (const o of cluster) {
-      const v = o.identityEvidence;
-      if (v && !seen.has(v)) {
-        seen.add(v);
-        const list = byIdentity.get(v) ?? [];
-        list.push(ci);
-        byIdentity.set(v, list);
-      }
-    }
-  });
+  const photoSets = clusters.map((cluster) => new Set(cluster.map((o) => o.photoId)));
+  const hashes = clusters.map((cluster) =>
+    cluster.filter((o) => o.cropHash != null).map((o) => o.cropHash as string)
+  );
 
   // Union-find over cluster indices.
   const parent = clusters.map((_, i) => i);
@@ -402,16 +431,16 @@ function mergeByIdentity(survey: Survey, clusters: Observation[][]): Observation
     if (ra !== rb) parent[rb] = ra;
   };
 
-  for (const list of byIdentity.values()) {
-    if (list.length < 2) continue;
-    for (let a = 0; a < list.length; a++) {
-      for (let b = a + 1; b < list.length; b++) {
-        const pa = repPoints[list[a]];
-        const pb = repPoints[list[b]];
-        if (!pa || !pb) continue; // no position evidence -> no merge
-        if (distanceMeters(pa.lat, pa.lon, pb.lat, pb.lon) > IDENTITY_MERGE_RADIUS_M) continue;
-        union(list[a], list[b]);
-      }
+  for (let a = 0; a < clusters.length; a++) {
+    for (let b = a + 1; b < clusters.length; b++) {
+      // Same-photo detections are never merged by evidence labels.
+      if ([...photoSets[a]].some((pid) => photoSets[b].has(pid))) continue;
+      const pa = repPoints[a];
+      const pb = repPoints[b];
+      if (!pa || !pb) continue; // no position evidence -> no merge
+      if (distanceMeters(pa.lat, pa.lon, pb.lat, pb.lon) > EVIDENCE_MERGE_RADIUS_M) continue;
+      if (!visualMatch(hashes[a], hashes[b])) continue; // no visual match -> no merge
+      union(a, b);
     }
   }
 
@@ -428,6 +457,17 @@ function mergeByIdentity(survey: Survey, clusters: Observation[][]): Observation
     merged.push(g.flatMap((i) => clusters[i]));
   }
   return merged;
+}
+
+/** True when some crop in A and some crop in B are perceptually
+ *  identical (issue #2 blocker 2 — explicit pairwise visual match). */
+function visualMatch(ha: string[], hb: string[]): boolean {
+  for (const a of ha) {
+    for (const b of hb) {
+      if (hashesMatch(a, b)) return true;
+    }
+  }
+  return false;
 }
 
 function buildCandidate(

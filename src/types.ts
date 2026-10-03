@@ -179,6 +179,12 @@ export interface Observation {
   tagConfidence: number;
   /** 0..1 confidence in the detection itself (issue #2 provenance). */
   detectionConfidence?: number;
+  /** 64-bit perceptual hash (16 hex chars) of the cropped detection
+   *  region (issue #2 blocker 2). Real visual evidence used for
+   *  cross-photo same-object grouping; absent when the image could not
+   *  be decoded/hashed — such observations never merge across photos
+   *  by identity. */
+  cropHash?: string;
   /** Detected visual attributes that the class policy does NOT allow to
    *  be applied automatically (review-only classes, keys outside the
    *  class's declared tag policy). Carried as unconfirmed evidence for
