@@ -1,0 +1,30 @@
+# Reference Responses API proxy for OSM-Photo-Mapper (issue #12).
+#
+# Deploy:
+#   cd proxy
+#   npx wrangler login
+#   npx wrangler secret put OPENAI_API_KEY
+#   npx wrangler secret put PROXY_TOKEN
+#   npx wrangler deploy
+#
+# Then in the app (Settings → Analysis):
+#   Mode: Proxy
+#   Endpoint: https://<your-worker>.workers.dev/v1/responses
+#   Proxy token: <the value you put in PROXY_TOKEN>
+
+name = "osm-photo-mapper-proxy"
+main = "worker.ts"
+compatibility_date = "2025-06-01"
+
+# Plain tunables (safe to keep in source — they cap spending, not secrets).
+[vars]
+ALLOWED_MODELS = "gpt-4o-mini"
+MAX_IMAGE_CHARS = "4500000"
+MAX_IMAGES_PER_REQUEST = "1"
+MAX_OUTPUT_TOKENS = "2000"
+REQUESTS_PER_MINUTE = "10"
+
+# Secrets are NOT stored in this file:
+#   OPENAI_API_KEY — the operator's OpenAI key (server-side only)
+#   PROXY_TOKEN    — the token the browser presents
+# Set them with: npx wrangler secret put <name>
