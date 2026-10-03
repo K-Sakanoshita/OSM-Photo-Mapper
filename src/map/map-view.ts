@@ -11,6 +11,7 @@ import type { FeatureCandidate, GpsSample, Photo, Survey } from '../types';
 export class MapView {
   map: maplibregl.Map;
   private candidateLayerId = 'candidates';
+  private candidateHitLayerId = 'candidates-hit';
   private candidateSourceId = 'candidates-source';
   private candidateData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private trackLayerId = 'track';
@@ -56,16 +57,23 @@ export class MapView {
 
       this.map.addSource(this.candidateSourceId, { type: 'geojson', data: emptyFeatureCollection() });
       this.map.addLayer({
+        id: this.candidateHitLayerId,
+        type: 'circle',
+        source: this.candidateSourceId,
+        paint: { 'circle-radius': 28, 'circle-color': '#ffffff', 'circle-opacity': 0.01 }
+      });
+      this.map.addLayer({
         id: this.candidateLayerId,
         type: 'circle',
         source: this.candidateSourceId,
         paint: {
-          'circle-radius': 8,
+          'circle-radius': 15,
           'circle-color': ['get', 'color'],
-          'circle-stroke-width': 2,
+          'circle-stroke-width': 3,
           'circle-stroke-color': '#ffffff'
         }
       });
+      (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource).setData(this.candidateData);
 
       this.enableDragging();
     });
@@ -142,6 +150,8 @@ export class MapView {
       drag = { id, lat, lon };
       this.map.dragPan.disable();
       this.map.boxZoom.disable();
+      this.map.touchZoomRotate.disable();
+      this.map.getCanvas().style.cursor = 'grabbing';
     };
 
     const moveDrag = (lng: number, lat: number): void => {
@@ -159,6 +169,8 @@ export class MapView {
       drag = null;
       this.map.dragPan.enable();
       this.map.boxZoom.enable();
+      this.map.touchZoomRotate.enable();
+      this.map.getCanvas().style.cursor = '';
       if (d) this.onPinDragged?.(d.id, d.lat, d.lon);
     };
 
@@ -166,7 +178,13 @@ export class MapView {
 
     // Mouse: layer-scoped mousedown starts the drag; map-level mousemove/
     // mouseup track and end it. (MapLibre has no pointer events on layers.)
-    this.map.on('mousedown', this.candidateLayerId, (e: maplibregl.MapLayerMouseEvent) => {
+    this.map.on('mouseenter', this.candidateHitLayerId, () => {
+      if (!drag) this.map.getCanvas().style.cursor = 'grab';
+    });
+    this.map.on('mouseleave', this.candidateHitLayerId, () => {
+      if (!drag) this.map.getCanvas().style.cursor = '';
+    });
+    this.map.on('mousedown', this.candidateHitLayerId, (e: maplibregl.MapLayerMouseEvent) => {
       const feat = featureAt(e.features);
       const id = feat?.properties?.id as string | undefined;
       if (id) {
@@ -183,7 +201,7 @@ export class MapView {
 
     // Touch: layer-scoped touchstart starts the drag (hit-testing the
     // candidate layer), map-level touchmove/touchend track and end it.
-    this.map.on('touchstart', this.candidateLayerId, (e: maplibregl.MapLayerTouchEvent) => {
+    this.map.on('touchstart', this.candidateHitLayerId, (e: maplibregl.MapLayerTouchEvent) => {
       const feat = featureAt(e.features);
       const id = feat?.properties?.id as string | undefined;
       if (id) {

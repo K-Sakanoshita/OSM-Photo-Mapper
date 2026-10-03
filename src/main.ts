@@ -1540,15 +1540,17 @@ class App {
       const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps);
       posRow.append(el('b', {}, 'Position'), hasCameraGps
         ? ' unknown — camera GPS locates the photo, not the photographed object. '
-        : ' unknown — no usable camera GPS was read from the photo. ',
-        el('button', { class: 'btn small', onclick: () => {
-          this.placingCandidate = false;
-          this.placingExistingCandidateId = this.placingExistingCandidateId === c.id ? null : c.id;
-          const photo = c.observationIds.map((id) => photoByObs.get(id)).find((p) => p?.gps);
-          if (photo?.gps) this.mapView.map.jumpTo({ center: [photo.gps.lon, photo.gps.lat], zoom: 18 });
-          this.renderReviewScreen(true);
-        } }, this.placingExistingCandidateId === c.id ? 'Cancel placement' : 'Place pin on map'));
+        : ' unknown — no usable camera GPS was read from the photo. ');
     }
+    posRow.append(el('button', { class: 'btn small', onclick: () => {
+      this.placingCandidate = false;
+      this.placingExistingCandidateId = this.placingExistingCandidateId === c.id ? null : c.id;
+      if (c.lat == null || c.lon == null) {
+        const photo = c.observationIds.map((id) => photoByObs.get(id)).find((p) => p?.gps);
+        if (photo?.gps) this.mapView.map.jumpTo({ center: [photo.gps.lon, photo.gps.lat], zoom: 18 });
+      }
+      void this.renderReviewScreen(true);
+    } }, this.placingExistingCandidateId === c.id ? 'Cancel placement' : c.lat == null ? 'Place pin on map' : 'Move pin on map'));
     card.append(posRow);
     card.append(el('div', { class: 'row' }, `OSM mapping: ${Object.entries(c.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'unresolved'}`));
 
