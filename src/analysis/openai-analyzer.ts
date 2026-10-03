@@ -132,16 +132,14 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
 
     if (!res.ok) {
       const detail = await safeText(res);
-      // The detail is API-provided text — never interpolate anything
-      // derived from the key into it (issue #12).
-      throw new Error(`OpenAI API error ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+      throw new Error(`OpenAI API error ${res.status}${detail ? `: ${this.redactCredential(detail).slice(0, 300)}` : ''}`);
     }
 
     const json = (await res.json()) as ResponsesResponse;
 
     if (json.status === 'failed' || json.status === 'cancelled') {
       throw new Error(
-        `OpenAI Responses run ${json.status}${json.error?.message ? `: ${json.error.message.slice(0, 300)}` : ''}`
+        `OpenAI Responses run ${json.status}${json.error?.message ? `: ${this.redactCredential(json.error.message).slice(0, 300)}` : ''}`
       );
     }
     // Issue #14: an incomplete run (e.g. truncated at max_output_tokens)
@@ -154,7 +152,9 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       );
     }
 
-    const text = extractText(json);
+    let text: string | null;
+    try { text = extractText(json); }
+    catch (error) { throw new Error(this.redactCredential((error as Error).message)); }
     if (text == null) {
       throw new Error('OpenAI API returned no text output');
     }
@@ -177,6 +177,10 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
         ? { ...o, featureType: UNKNOWN_FEATURE_TYPE }
         : o
     );
+  }
+
+  private redactCredential(message: string): string {
+    return this.authToken ? message.split(this.authToken).join('[redacted]') : message;
   }
 
   /** Build the Responses API request body (issue #12). */

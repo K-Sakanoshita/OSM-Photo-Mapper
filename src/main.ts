@@ -19,6 +19,7 @@ import { surveyDb } from './db/survey-db';
 import { MockAnalyzer } from './analysis/mock-analyzer';
 import { SurveyAnalysisPipeline } from './analysis/pipeline';
 import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
+import { clearProxySettings, loadProxySettings, saveProxySettings } from './analysis/proxy-settings';
 import type { ImageObservationAnalyzer } from './analysis/analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
 import { buildOsmChange } from './osm/osmchange';
@@ -159,14 +160,21 @@ class App {
   private analyzerKind: 'mock' | 'openai' = 'openai';
   private openaiMode: 'proxy' | 'direct' = 'proxy';
   private openaiKey = '';
-  private openaiProxyEndpoint = '';
+  private openaiProxyEndpoint = 'https://osm-photo-mapper-proxy.openacrossbase.workers.dev/v1/responses';
   private openaiProxyAuth = '';
+  private proxySettingsAvailable = true;
   private openaiModel = '';
   private analysisStatuses: PhotoAnalysisStatus[] = [];
   private analysisProgress = '';
   private analysisResult: AnalysisResult | null = null;
 
   constructor() {
+    const savedProxy = loadProxySettings(this.proxyStorage());
+    this.proxySettingsAvailable = savedProxy.available;
+    if (savedProxy.settings) {
+      this.openaiProxyEndpoint = savedProxy.settings.endpoint;
+      this.openaiProxyAuth = savedProxy.settings.token;
+    }
     const app = document.getElementById('app');
     if (!app) throw new Error('#app missing');
 
@@ -207,6 +215,37 @@ class App {
     void this.repairStaleRecordingFlags();
 
     this.render();
+  }
+
+  private proxyStorage(): Storage | null {
+    try { return window.localStorage; } catch { return null; }
+  }
+
+  private persistProxySettings(): void {
+    this.proxySettingsAvailable = saveProxySettings(this.proxyStorage(), {
+      endpoint: this.openaiProxyEndpoint,
+      token: this.openaiProxyAuth
+    });
+    this.updateProxyStorageNote();
+  }
+
+  private updateProxyStorageNote(): void {
+    const note = this.content.querySelector<HTMLElement>('#proxy-storage-note');
+    if (note) note.textContent = this.proxySettingsAvailable
+      ? 'Proxy settings entered here are saved on this device. A saved token grants use of the proxy; do not use this on a shared device.'
+      : 'Device storage is unavailable. Proxy settings are held in memory and will be lost on reload.';
+  }
+
+  private forgetProxySettings(endpointInput: HTMLInputElement, authInput: HTMLInputElement): void {
+    this.proxySettingsAvailable = clearProxySettings(this.proxyStorage());
+    this.openaiProxyEndpoint = '';
+    this.openaiProxyAuth = '';
+    endpointInput.value = '';
+    authInput.value = '';
+    this.updateProxyStorageNote();
+    toast(this.proxySettingsAvailable
+      ? 'Proxy endpoint and token cleared from this device'
+      : 'Proxy fields cleared; device storage could not be updated');
   }
 
   /** Reset any persisted `recording` flags left behind by crashed sessions. */
@@ -1075,7 +1114,10 @@ class App {
       class: 'note-input',
       placeholder: 'https://your-proxy.example/responses',
       value: this.openaiProxyEndpoint,
-      oninput: () => { this.openaiProxyEndpoint = (endpointInput as HTMLInputElement).value; }
+      oninput: () => {
+        this.openaiProxyEndpoint = (endpointInput as HTMLInputElement).value;
+        this.persistProxySettings();
+      }
     });
     const authInput = el('input', {
       type: 'password',
@@ -1083,7 +1125,10 @@ class App {
       class: 'note-input',
       placeholder: 'Proxy token (optional)',
       value: this.openaiProxyAuth,
-      oninput: () => { this.openaiProxyAuth = (authInput as HTMLInputElement).value; }
+      oninput: () => {
+        this.openaiProxyAuth = (authInput as HTMLInputElement).value;
+        this.persistProxySettings();
+      }
     });
     const modelInput = el('input', {
       type: 'text',
@@ -1097,7 +1142,13 @@ class App {
       'div',
       { class: 'transport-fields', 'data-transport': 'proxy' },
       el('div', { class: 'field' }, el('label', { for: 'openai-proxy-endpoint' }, 'Proxy endpoint'), endpointInput),
-      el('div', { class: 'field' }, el('label', { for: 'openai-proxy-auth' }, 'Proxy token'), authInput)
+      el('div', { class: 'field' }, el('label', { for: 'openai-proxy-auth' }, 'Proxy token'), authInput),
+      el('div', { id: 'proxy-storage-note', class: 'hint warn' }),
+      el('button', {
+        type: 'button',
+        class: 'btn small',
+        onclick: () => this.forgetProxySettings(endpointInput as HTMLInputElement, authInput as HTMLInputElement)
+      }, 'Forget / Clear proxy settings')
     );
     const modelField = el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput);
     let openaiPanel: TagEl<'div'>;
@@ -1235,6 +1286,7 @@ class App {
       )
     );
     this.content.dataset.analyzer = this.analyzerKind;
+    this.updateProxyStorageNote();
 
     this.bottombar.replaceChildren(
       el('button', { class: 'btn', onclick: () => { this.mode = 'survey'; this.render(); } }, '← Field'),

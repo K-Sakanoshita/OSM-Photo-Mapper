@@ -315,6 +315,12 @@ describe('proxy transport (issue #12)', () => {
     } as OpenAIVisionConfig);
   }
 
+  it('redacts a proxy token echoed in an API error', async () => {
+    const a = proxyAnalyzer({ fetchImpl: stubFetch('proxy rejected tok-123', 401) });
+    await expect(a.analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1'))))
+      .rejects.toThrow('proxy rejected [redacted]');
+  });
+
   it('posts to the proxy endpoint with the proxy token', async () => {
     await proxyAnalyzer().analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
     expect(lastUrl).toBe('https://proxy.example/responses');
