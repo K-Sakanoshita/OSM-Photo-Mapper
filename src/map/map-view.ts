@@ -23,7 +23,7 @@ export class MapView {
   ) {
     this.map = new maplibregl.Map({
       container,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: 'https://tile.openstreetmap.jp/styles/osm-bright-ja/style.json',
       center: [139.767, 35.681],
       zoom: 15
     });
