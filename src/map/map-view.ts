@@ -24,7 +24,7 @@ export class MapView {
   ) {
     this.map = new maplibregl.Map({
       container,
-      style: 'https://tile.openstreetmap.jp/styles/osm-bright-ja/style.json',
+      style: new URL('./osmfj_nopoi.json', document.baseURI).href,
       center: [139.767, 35.681],
       zoom: 15
     });
