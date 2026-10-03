@@ -274,6 +274,10 @@ export const surveyDb = {
     );
   },
 
+  async deleteCandidate(id: string): Promise<void> {
+    await tx([STORES.candidates], 'readwrite', (t) => t.objectStore(STORES.candidates).delete(id));
+  },
+
   async deleteSurvey(id: string): Promise<void> {
     await openDB().then(
       (db) =>

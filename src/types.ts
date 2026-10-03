@@ -284,7 +284,7 @@ export interface FeatureCandidate {
   id: string;
   surveyId: string;
   /** Persisted source of every contributing observation. */
-  analyzer?: 'mock' | 'openai' | 'mixed';
+  analyzer?: 'mock' | 'openai' | 'mixed' | 'manual';
   analyzerModel?: string;
   featureType: string;
   /** Estimated position (set once analysis runs; draggable in review). */

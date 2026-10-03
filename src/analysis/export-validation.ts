@@ -58,7 +58,7 @@ function hasValue(v: string | undefined): boolean {
  * here — their tag set is merged onto a real, already-tagged object.
  */
 export function validateCandidateExport(c: FeatureCandidate): CandidateExportValidation {
-  if (c.analyzer !== 'openai') {
+  if (c.analyzer !== 'openai' && c.analyzer !== 'manual') {
     return { exportable: false, gate: 'provenance', reason: 'Only confirmed OpenAI analysis can be exported; Mock or legacy source is unverified.' };
   }
   // Gate 1: geometry policy (issue #9) — independent of semantics.

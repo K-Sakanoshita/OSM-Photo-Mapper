@@ -29,6 +29,12 @@ function classOf(id: string) {
 }
 
 describe('validateCandidateExport (issue #11)', () => {
+  it('allows a manually placed candidate only after meaningful tags are entered', () => {
+    const manual = candidate({ analyzer: 'manual', featureType: 'manual', tags: {} });
+    expect(validateCandidateExport(manual).gate).toBe('semantics');
+    manual.tags = { amenity: 'bench' };
+    expect(validateCandidateExport(manual).exportable).toBe(true);
+  });
   describe('required class tags', () => {
     it('new bench with required amenity=bench is exportable', () => {
       const v = validateCandidateExport(candidate());

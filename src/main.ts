@@ -27,6 +27,7 @@ import { validateCandidateExport } from './analysis/export-validation';
 import { fetchLiveObject, type LiveOsmObject } from './osm/osm-api';
 import {
   applyMappingToTags,
+  FEATURE_CLASSES,
   commonValuesFor,
   findChosenMapping,
   getFeatureClass,
@@ -146,6 +147,7 @@ class App {
   private gpsPollTimer: number | undefined;
   private gpsTickTimer: number | undefined;
   private analyzing = false;
+  private placingCandidate = false;
 
   /** Issue #2: batch analysis state.
    *  analyzerKind: which ImageObservationAnalyzer runs the batch.
@@ -205,7 +207,8 @@ class App {
 
     this.mapView = new MapView(
       document.getElementById('map') as HTMLElement,
-      (id, lat, lon) => void this.onPinDragged(id, lat, lon)
+      (id, lat, lon) => void this.onPinDragged(id, lat, lon),
+      (lat, lon) => void this.onMapSelected(lat, lon)
     );
 
     // Issue #6: a persisted `recording=true` flag from a crashed session is
@@ -960,6 +963,7 @@ class App {
       }
 
       await this.enrichCandidates(fresh, result.candidates);
+      result.candidates.push(...fresh.candidates.filter((c) => c.analyzer === 'manual'));
       await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
       fresh.candidates = result.candidates;
       this.survey = fresh;
@@ -1287,7 +1291,7 @@ class App {
     this.updateProxyStorageNote();
 
     this.bottombar.replaceChildren(
-      el('button', { class: 'btn', onclick: () => { this.mode = 'survey'; this.render(); } }, '← Field'),
+      el('button', { class: 'btn', onclick: () => { this.placingCandidate = false; this.mode = 'survey'; this.render(); } }, '← Field'),
       el('button', {
         id: 'analyze-btn',
         class: 'btn primary',
@@ -1383,29 +1387,30 @@ class App {
     });
 
     this.bottombar.replaceChildren(
-      el('button', { class: 'btn', onclick: () => { this.mode = 'survey'; this.render(); } }, '← Field'),
+      el('button', { class: 'btn', onclick: () => { this.placingCandidate = false; this.mode = 'survey'; this.render(); } }, '← Field'),
       el('button', {
         class: 'btn primary',
-        disabled: s.candidates.length === 0 || s.candidates.some((c) => c.analyzer !== 'openai'),
+        disabled: s.candidates.length === 0 || s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual'),
         onclick: () => { this.mode = 'upload'; this.render(); }
       }, 'Review upload →')
     );
 
     const observations = await surveyDb.listObservations(s.id);
-    if (observations.length === 0) {
-      this.content.replaceChildren(
-        el('div', { class: 'empty-hint' }, 'No candidates yet. Capture photos, then press Map photos.')
-      );
-      return;
-    }
-
     const photoByObs = this.photosForObservations(s, observations);
     const obsById = new Map<string, Observation>(observations.map((o) => [o.id, o]));
     const cards = s.candidates.map((c) => this.buildCandidateCard(c, photoByObs, obsById));
     this.content.replaceChildren(
-      ...(s.candidates.some((c) => c.analyzer !== 'openai')
+      el('div', { class: 'manual-placement' },
+        el('button', { class: 'btn', onclick: () => {
+          this.placingCandidate = !this.placingCandidate;
+          this.render();
+        } }, this.placingCandidate ? 'Cancel pin placement' : '+ Add pin on map'),
+        el('span', {}, this.placingCandidate ? 'Tap the map where the object is located.' : 'Add an object manually if analysis found no candidate.')
+      ),
+      ...(s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual')
         ? [el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled')]
         : []),
+      ...(s.candidates.length === 0 ? [el('div', { class: 'empty-hint' }, 'No candidates yet. Add a pin on the map, or capture photos and press Map photos.')] : []),
       el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
       ...cards
     );
@@ -1435,7 +1440,8 @@ class App {
     const evidence = c.observationIds.map((id) => obsById.get(id)).filter((o): o is Observation => !!o);
     const first = evidence.find((o) => !!photoByObs.get(o.id)?.image);
     const img = first ? photoByObs.get(first.id)?.image ?? '' : '';
-    const thumb = el('img', { class: 'thumb', src: img || undefined, alt: 'source photo' });
+    const thumb = c.analyzer === 'manual' ? el('span', { class: 'manual-thumb', 'aria-hidden': 'true' }, '📍')
+      : el('img', { class: 'thumb', src: img || undefined, alt: 'source photo' });
 
     const statusSel = el('select', {
       class: 'status-sel',
@@ -1449,10 +1455,19 @@ class App {
     statusSel.value = c.status;
 
     card.append(
-      el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? c.featureType), statusSel)
+      el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? (c.analyzer === 'manual' ? 'Custom tags' : c.featureType)), statusSel)
     );
-    card.append(el('div', { class: 'row' }, `Analyzer: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
-    card.append(el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
+    card.append(el('div', { class: 'row' }, `Source: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'manual' ? 'Placed manually on map' : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
+    if (c.analyzer === 'manual') {
+      const classSelect = el('select', { 'aria-label': 'Feature type', onchange: () => void this.onManualClassChanged(c, classSelect) },
+        el('option', { value: 'manual' }, 'Custom tags'),
+        ...FEATURE_CLASSES.map((cls) => el('option', { value: cls.id }, cls.label))
+      );
+      classSelect.value = c.featureType;
+      card.append(el('div', { class: 'row' }, 'Feature type: ', classSelect),
+        el('button', { class: 'btn small', onclick: () => void this.onDeleteManualCandidate(c) }, 'Delete pin'));
+    }
+    if (c.analyzer !== 'manual') card.append(el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
     for (const obs of evidence) {
       const sourceImage = photoByObs.get(obs.id)?.image;
       if (sourceImage) {
@@ -1531,7 +1546,7 @@ class App {
     const cam = c.observationIds
       .map((id) => photoByObs.get(id)?.cameraPosition)
       .find((v) => v != null);
-    card.append(
+    if (c.analyzer !== 'manual') card.append(
       el(
         'div',
         { class: 'row cam-row' },
@@ -1898,6 +1913,35 @@ class App {
     toast('Pin moved');
   }
 
+  private async onMapSelected(lat: number, lon: number): Promise<void> {
+    const s = this.survey;
+    if (!this.placingCandidate || this.mode !== 'review' || !s) return;
+    this.placingCandidate = false;
+    const c: FeatureCandidate = {
+      id: crypto.randomUUID(), surveyId: s.id, analyzer: 'manual', featureType: 'manual',
+      lat, lon, positionConfidence: 0, tagConfidence: 0, tags: {}, observationIds: [],
+      osmMatches: [], warnings: ['Position placed manually on the map. Check the location and tags before upload.'], status: 'new'
+    };
+    await surveyDb.updateCandidate(c);
+    s.candidates.push(c);
+    this.render();
+  }
+
+  private async onManualClassChanged(c: FeatureCandidate, select: HTMLSelectElement): Promise<void> {
+    const cls = getFeatureClass(select.value);
+    c.featureType = select.value;
+    c.tags = cls?.autoTag ? { ...cls.requiredTags } : {};
+    await surveyDb.updateCandidate(c);
+    this.render();
+  }
+
+  private async onDeleteManualCandidate(c: FeatureCandidate): Promise<void> {
+    if (!this.survey || c.analyzer !== 'manual') return;
+    await surveyDb.deleteCandidate(c.id);
+    this.survey.candidates = this.survey.candidates.filter((item) => item.id !== c.id);
+    this.render();
+  }
+
   /** Issue #9: apply the OSM mapping chosen for a review-only candidate. */
   private async onMappingChosen(c: FeatureCandidate, m: OsmMapping): Promise<void> {
     const all = mappingsFor(c.featureType);
@@ -1951,7 +1995,7 @@ class App {
     const s = this.survey;
     if (!s) return;
     this.setMode('upload', 'Review upload');
-    if (s.candidates.some((c) => c.analyzer !== 'openai')) {
+    if (s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual')) {
       this.content.replaceChildren(el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled'));
       this.bottombar.replaceChildren(el('button', { class: 'btn', onclick: () => { this.mode = 'review'; this.render(); } }, '← Review'));
       return;

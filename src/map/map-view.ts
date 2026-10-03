@@ -19,7 +19,8 @@ export class MapView {
 
   constructor(
     container: HTMLElement,
-    private readonly onPinDragged?: (candidateId: string, lat: number, lon: number) => void
+    private readonly onPinDragged?: (candidateId: string, lat: number, lon: number) => void,
+    private readonly onMapSelected?: (lat: number, lon: number) => void
   ) {
     this.map = new maplibregl.Map({
       container,
@@ -33,6 +34,7 @@ export class MapView {
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true
     }));
+    this.map.on('click', (e) => this.onMapSelected?.(e.lngLat.lat, e.lngLat.lng));
 
     this.map.on('load', () => {
       this.map.addSource(this.trackSourceId, { type: 'geojson', data: emptyFeatureCollection() });
