@@ -9,6 +9,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 import { MapView } from './map/map-view';
+import { tagKeys, tagValues } from './map/tag-options';
 import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
@@ -1998,24 +1999,54 @@ class App {
   }
 
   private async onEditTag(c: FeatureCandidate, key: string): Promise<void> {
-    const v = window.prompt(t(`Edit value for "${key}=" (leave empty to remove):`), c.tags[key] ?? '');
-    if (v == null) return;
-    const val = v.trim();
-    if (val) c.tags[key] = val;
-    else delete c.tags[key];
-    await surveyDb.updateCandidate(c);
-    this.refreshCandidateEditor();
+    const card = [...this.content.querySelectorAll<HTMLElement>('[data-candidate-id]')]
+      .find((node) => node.dataset.candidateId === c.id);
+    const keyInput = card?.querySelector<HTMLInputElement>('.tag-key');
+    const valueInput = card?.querySelector<HTMLInputElement>('.tag-value');
+    if (!keyInput || !valueInput) return;
+    keyInput.value = key;
+    valueInput.value = c.tags[key] ?? '';
+    keyInput.dispatchEvent(new Event('input'));
+    valueInput.focus();
   }
 
   private buildAddTagRow(c: FeatureCandidate): HTMLElement {
     const kInput = el('input', { class: 'tag-key', placeholder: 'key', maxlength: 50 });
     const vInput = el('input', { class: 'tag-value', placeholder: 'value' });
+    const keySelect = el('select', { 'aria-label': 'Choose tag key' },
+      el('option', { value: '' }, 'Choose key / enter manually'),
+      ...tagKeys().map((key) => el('option', { value: key }, key)));
+    const valueSelect = el('select', { 'aria-label': 'Choose tag value' });
+    const saveButton = el('button', { class: 'btn small', onclick: () => void this.onAddTag(c, kInput, vInput) }, '+ tag');
+    const refreshOptions = (): void => {
+      const key = kInput.value.trim();
+      const values = [...new Set([...tagValues(key), ...(commonValuesFor(c.featureType)[key] ?? [])])].sort();
+      keySelect.value = tagKeys().includes(key) ? key : '';
+      valueSelect.replaceChildren(el('option', { value: '' }, 'Choose value / enter manually'),
+        ...values.map((value) => el('option', { value }, value)));
+      valueSelect.value = values.includes(vInput.value) ? vInput.value : '';
+      valueSelect.disabled = values.length === 0;
+      saveButton.textContent = t(key in c.tags ? 'Save tag' : '+ tag');
+    };
+    kInput.oninput = refreshOptions;
+    vInput.oninput = () => {
+      valueSelect.value = [...valueSelect.options].some((option) => option.value === vInput.value)
+        ? vInput.value : '';
+    };
+    keySelect.onchange = () => {
+      if (!keySelect.value) return;
+      kInput.value = keySelect.value;
+      vInput.value = '';
+      refreshOptions();
+    };
+    valueSelect.onchange = () => { if (valueSelect.value) vInput.value = valueSelect.value; };
+    refreshOptions();
     return el(
       'div',
       { class: 'add-tag-row' },
-      kInput,
-      vInput,
-      el('button', { class: 'btn small', onclick: () => void this.onAddTag(c, kInput, vInput) }, '+ tag')
+      el('div', { class: 'tag-input-group' }, keySelect, kInput),
+      el('div', { class: 'tag-input-group' }, valueSelect, vInput),
+      saveButton
     );
   }
 
@@ -2026,7 +2057,8 @@ class App {
       toast('Tag key is required');
       return;
     }
-    c.tags[k] = v;
+    if (!v && k in c.tags) delete c.tags[k];
+    else c.tags[k] = v;
     await surveyDb.updateCandidate(c);
     this.refreshCandidateEditor();
   }

@@ -379,7 +379,16 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
   gap: 6px;
   margin-top: 6px;
 }
-.add-tag-row input {
+.tag-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.add-tag-row input,
+.add-tag-row select {
+  width: 100%;
   flex: 1 1 auto;
   min-width: 0;
   font-size: 12px;

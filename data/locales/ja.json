@@ -283,7 +283,12 @@
     "Estimated object bearing": "対象への推定方位",
     "(AI estimate from photo)": "（写真からのAI概算）",
     "unavailable — no camera heading": "取得不可：カメラの方位情報なし",
-    "(north 0°, east 90°)": "（北0°・東90°）"
+    "(north 0°, east 90°)": "（北0°・東90°）",
+    "Choose tag key": "タグのkeyを選択",
+    "Choose tag value": "タグのvalueを選択",
+    "Choose key / enter manually": "keyを選択／手入力",
+    "Choose value / enter manually": "valueを選択／手入力",
+    "Save tag": "タグを保存"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",
