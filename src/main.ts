@@ -1966,7 +1966,12 @@ class App {
       el('div', { class: 'm-meta' }, `${m.osmType}/${m.osmId} · ${distance} · Score ${Math.round(m.matchScore * 100)}% · ${tagPreview}`),
       el('button', {
         class: 'link-btn',
-        onclick: () => this.mapView.map.flyTo({ center: [m.lon, m.lat], zoom: 19 })
+        onclick: (event: Event) => {
+          // The card's selection handler would otherwise recenter on the
+          // analyzed pin immediately after focusing this OSM object.
+          event.stopPropagation();
+          this.mapView.showOsmMatch(m);
+        }
       }, 'Show on map'),
       ...(linked ? [el('span', {}, 'Merged')] : [])
     );

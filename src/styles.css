@@ -661,3 +661,9 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
 .shutter-btn:disabled { opacity: 0.5; pointer-events: none; }
 
 .gps-status.gps-acquiring { background: rgba(38, 50, 56, 0.88); }
+
+.osm-icon-pin.osm-pin-focused {
+  z-index: 10;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 10px rgba(255, 202, 40, 0.4), 0 2px 6px #555 !important;
+}

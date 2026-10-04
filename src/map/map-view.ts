@@ -25,6 +25,7 @@ export class MapView {
   private osmMarkers: maplibregl.Marker[] = [];
   private loadingIcons = new Set<string>();
   private selectedCandidateId: string | null = null;
+  private focusedOsmId: string | null = null;
 
   constructor(
     container: HTMLElement,
@@ -165,6 +166,7 @@ export class MapView {
         content.textContent = `${merged ? t('Merged') + ' · ' : ''}${id} · ${Object.entries(match.tags).map(([key, value]) => `${key}=${value}`).join(' ')}`;
         const element = document.createElement('div');
         element.className = 'osm-icon-pin';
+        element.dataset.osmId = id;
         const linkedIds = candidates.filter((candidate) => candidate.status === 'existing'
           && candidate.linkedOsmId === match.osmId && (candidate.linkedOsmType ?? 'node') === match.osmType).map((candidate) => candidate.id);
         element.dataset.candidateIds = JSON.stringify(linkedIds);
@@ -223,8 +225,20 @@ export class MapView {
     for (const marker of this.osmMarkers) {
       const element = marker.getElement();
       const selected = id != null && JSON.parse(element.dataset.candidateIds ?? '[]').includes(id);
-      element.style.outline = selected ? '4px solid #ffca28' : '';
+      const focused = element.dataset.osmId === this.focusedOsmId;
+      element.style.outline = focused || selected ? '4px solid #ffca28' : '';
+      element.classList.toggle('osm-pin-focused', focused);
     }
+  }
+
+  /** Highlight the exact nearby OSM object and identify it in a popup. */
+  showOsmMatch(match: FeatureCandidate['osmMatches'][number]): void {
+    this.focusedOsmId = `${match.osmType}/${match.osmId}`;
+    for (const marker of this.osmMarkers) marker.getPopup()?.remove();
+    this.setSelectedCandidate(this.selectedCandidateId);
+    this.map.flyTo({ center: [match.lon, match.lat], zoom: 19 });
+    const marker = this.osmMarkers.find((item) => item.getElement().dataset.osmId === this.focusedOsmId);
+    if (marker && !marker.getPopup()?.isOpen()) marker.togglePopup();
   }
 
   private async loadIcon(filename: string): Promise<void> {
