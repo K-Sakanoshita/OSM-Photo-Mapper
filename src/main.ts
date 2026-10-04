@@ -27,6 +27,8 @@ import {
 import { surveyDb } from './db/survey-db';
 import { canGroupCandidates, groupEvidence, mergeCandidateGroup } from './analysis/candidate-group';
 import { SurveyAnalysisPipeline } from './analysis/pipeline';
+import { BrowserVision } from './analysis/browser-vision/client';
+import { BROWSER_VISION_VERSION, browserVisionConfig, requiresPhotoReview } from './analysis/browser-vision/policy';
 import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
 import { loadProxySettings, saveProxySettings } from './analysis/proxy-settings';
 import type { ImageObservationAnalyzer } from './analysis/analyzer';
@@ -159,6 +161,7 @@ class App {
   private gpsState: 'acquiring' | 'unavailable' | 'active' = 'acquiring';
   private gpsTickTimer: number | undefined;
   private analyzing = false;
+  private browserVision = new BrowserVision();
   private placingCandidate = false;
   private placingExistingCandidateId: string | null = null;
   private selectedFieldCandidateId: string | null = null;
@@ -1006,6 +1009,7 @@ class App {
       }
       return new OpenAIVisionAnalyzer({
         mode: 'proxy',
+        beforeSend: (photo) => this.checkPhotoBeforeSending(photo),
         endpoint,
         ...(this.openaiProxyAuth.trim() ? { proxyAuth: this.openaiProxyAuth.trim() } : {}),
         ...(model ? { model } : {})
@@ -1021,6 +1025,7 @@ class App {
     }
     return new OpenAIVisionAnalyzer({
       mode: 'direct',
+      beforeSend: (photo) => this.checkPhotoBeforeSending(photo),
       apiKey: key,
       ...(model ? { model } : {})
     });
@@ -1599,7 +1604,8 @@ class App {
         : t(photo.headingNote ?? 'No orientation reading')}`),
       ...(photo.movementHeading != null ? [el('div', { class: 'row' }, `${t('Movement')}: ${t(`hdg ${photo.movementHeading.toFixed(0)}° (direction of travel — NOT a camera bearing)`)}`)] : []),
       el('div', { class: 'row' }, `${t('Note')}: ${photo.note || t('none')}`),
-      this.buildPhotoImportInfo(photo)
+      this.buildPhotoImportInfo(photo),
+      this.buildBrowserVisionDetails(photo)
     );
     const survey = this.survey;
     if (survey) {
@@ -1613,6 +1619,78 @@ class App {
     document.body.append(dialog);
     dialog.showModal();
     close.focus();
+  }
+
+  private async checkPhotoBeforeSending(photo: Photo): Promise<void> {
+    const result = await this.checkPhotoLocally(photo, false, (stage, percent) => {
+      if (!this.analyzing) return;
+      this.analysisProgress = `${t('Local photo check')}: ${t(stage)}${percent == null ? '' : ` ${Math.round(percent)}%`}`;
+      this.updateAnalysisProgressDom();
+    });
+    if (requiresPhotoReview(result)) throw new Error(t('Photo needs NSFW review before sending. Open photo details to review or retry the local check.'));
+  }
+
+  private async checkPhotoLocally(photo: Photo, force = false, progress?: (stage: string, percent?: number) => void) {
+    if (!force && photo.browserVision?.version === BROWSER_VISION_VERSION) return photo.browserVision;
+    if (!photo.image) throw new Error(t('Photo has no image data to analyze'));
+    const result = await this.browserVision.check(photo.image, progress);
+    // Read the latest row to avoid overwriting GPS restored while models loaded.
+    const survey = await surveyDb.loadSurvey(photo.surveyId);
+    const saved = survey?.photos.find((p) => p.id === photo.id);
+    if (!saved) throw new Error(t('Photo is no longer available'));
+    saved.browserVision = result;
+    await surveyDb.addPhoto(photo.surveyId, saved);
+    photo.browserVision = result;
+    const current = this.survey?.photos.find((p) => p.id === photo.id);
+    if (current) current.browserVision = result;
+    return result;
+  }
+
+  private buildBrowserVisionDetails(photo: Photo): HTMLElement {
+    const section = el('section', { class: 'local-vision-details' });
+    const redraw = () => {
+      section.replaceChildren();
+      const result = photo.browserVision;
+      appendLocalized(section, el('h3', {}, 'Browser-local photo analysis'),
+        el('p', { class: 'hint' }, 'Images stay on this device for these checks. The initial CLIP model download can be large; subsequent runs use the browser cache. Scores are model similarities, not guarantees.'));
+      if (result) {
+        appendLocalized(section, el('p', {}, `NSFW: ${t(result.nsfw.status === 'error' ? 'Check failed' : result.nsfw.verdict === 'review' ? 'Needs human review' : 'No NSFW flag')}`));
+        if (result.nsfw.error) section.append(el('p', { class: 'hint' }, t(result.nsfw.error)));
+        if (result.nsfw.scores) section.append(el('p', { class: 'hint' }, result.nsfw.scores.map((s) => `${s.label}: ${(s.score * 100).toFixed(1)}%`).join(' · ')));
+        appendLocalized(section, el('p', {}, `CLIP: ${t(result.clip.status === 'error' ? 'Check failed' : result.clip.purpose === 'poi' ? 'Suitable for OSM POI analysis' : result.clip.purpose === 'other' ? 'Possibly unsuitable for OSM POI analysis' : 'Purpose uncertain')}`));
+        if (result.clip.error) section.append(el('p', { class: 'hint' }, t(result.clip.error)));
+        for (const score of result.clip.categories ?? []) {
+          const category = browserVisionConfig.clip.categories.find((c) => c.id === score.label);
+          section.append(el('p', { class: 'hint' }, `${t(category?.label ?? score.label)}: ${(score.score * 100).toFixed(1)}%`));
+        }
+        section.append(el('p', { class: 'hint' }, `NSFWJS / ${result.nsfw.model} · CLIP / ${result.clip.model}`));
+      } else appendLocalized(section, el('p', {}, 'Not checked — runs before OpenAI analysis'));
+      const status = el('p', { role: 'status', 'aria-live': 'polite' });
+      const button = el('button', { class: 'btn', disabled: this.analyzing, onclick: async () => {
+        button.disabled = true;
+        section.querySelectorAll<HTMLButtonElement>('button').forEach((b) => { b.disabled = true; });
+        status.textContent = t('Checking photo locally…');
+        try {
+          await this.checkPhotoLocally(photo, true, (stage, percent) => { status.textContent = `${t(stage)}${percent == null ? '' : ` ${Math.round(percent)}%`}`; });
+          redraw();
+        } catch (error) { status.textContent = (error as Error).message; button.disabled = false; }
+      } }, result ? 'Run local check again' : 'Check in browser');
+      appendLocalized(section, button, status);
+      if (result && requiresPhotoReview(result)) appendLocalized(section, el('button', { class: 'btn', disabled: this.analyzing, onclick: async () => {
+        const survey = await surveyDb.loadSurvey(photo.surveyId);
+        const saved = survey?.photos.find((p) => p.id === photo.id);
+        if (!saved?.browserVision) return;
+        saved.browserVision.reviewedForSending = true;
+        await surveyDb.addPhoto(photo.surveyId, saved);
+        photo.browserVision = saved.browserVision;
+        const current = this.survey?.photos.find((p) => p.id === photo.id);
+        if (current) current.browserVision = saved.browserVision;
+        redraw();
+      } }, 'I reviewed this photo — allow sending'));
+      else if (result?.reviewedForSending) appendLocalized(section, el('p', {}, 'Sending allowed by reviewer'));
+    };
+    redraw();
+    return section;
   }
 
   private buildPhotoImportInfo(photo: Photo): HTMLElement {

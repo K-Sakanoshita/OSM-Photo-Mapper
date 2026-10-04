@@ -557,3 +557,17 @@ describe('explicit object comparison', () => {
     await expect(analyzer(stubFetch(response('merge immediately'))).compareObjects(items)).rejects.toThrow('Invalid identity');
   });
 });
+
+describe('local check before image transmission', () => {
+  it('never calls fetch if the local photo check requires review', async () => {
+    const fetchImpl = vi.fn();
+    const beforeSend = vi.fn(async () => { throw new Error('Needs NSFW review'); });
+    const instance = analyzer(fetchImpl as typeof fetch, { beforeSend });
+    const photo = makePhoto('photo');
+    await expect(instance.analyzePhoto(photo, makeContext(photo))).rejects.toThrow('Needs NSFW review');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const observation = { id: 'a', photoId: 'photo', surveyId: 's1', featureType: 'unknown', bbox: { x: .1, y: .1, w: .1, h: .1 }, tagSuggestions: {}, tagConfidence: .9 };
+    await expect(instance.compareObjects([{ photo, observation }, { photo: makePhoto('second'), observation: { ...observation, id: 'b', photoId: 'second' } }])).rejects.toThrow('Needs NSFW review');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

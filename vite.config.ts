@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   base: './',
+  worker: { format: 'es' },
   build: {
     rollupOptions: { input: { ja: resolve('index.html'), en: resolve('en/index.html') } }
   },
@@ -49,8 +50,15 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,json,svg,woff2}'],
+        // Large local ML chunks load on demand, not as part of PWA installation.
+        globIgnores: ['**/worker-*.js', '**/transformers*.js', '**/ort*.js', '**/*mobilenet*.js', '**/group1-shard*.js'],
         navigateFallbackDenylist: [/^\/api\//, /\/en(?:\/|$)/],
         runtimeCaching: [
+          {
+            urlPattern: ({ url }) => /\/assets\/(?:worker-|transformers|group1-shard|ort-).+\.(?:js|wasm)$/.test(url.pathname),
+            handler: 'CacheFirst',
+            options: { cacheName: 'browser-vision-runtime', expiration: { maxEntries: 32, maxAgeSeconds: 30 * 86400 } }
+          },
           {
             urlPattern: ({ url }) => url.pathname.includes('/icon/'),
             handler: 'CacheFirst',

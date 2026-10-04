@@ -1,0 +1,92 @@
+{
+  "version": "1",
+  "nsfw": {
+    "model": "MobileNetV2",
+    "explicitThreshold": 0.8,
+    "suggestiveThreshold": 0.85
+  },
+  "clip": {
+    "model": "Xenova/clip-vit-base-patch32",
+    "dtype": "q8",
+    "margin": 0.04,
+    "categories": [
+      {
+        "id": "street_furniture",
+        "label": "Street furniture and small outdoor objects",
+        "text": "street furniture such as a bench, trash bin, lamp post or drinking water fountain"
+      },
+      {
+        "id": "public_services",
+        "label": "Public services and facilities",
+        "text": "a public facility such as a public toilet, library, post office or bank"
+      },
+      {
+        "id": "food_drink",
+        "label": "Food and drink businesses",
+        "text": "a restaurant, cafe, bar or fast food business"
+      },
+      {
+        "id": "shop",
+        "label": "Retail shops",
+        "text": "a retail shop or storefront selling goods"
+      },
+      {
+        "id": "transport",
+        "label": "Transport and parking facilities",
+        "text": "a bus stop, station, bicycle parking or car park"
+      },
+      {
+        "id": "playground",
+        "label": "Playground equipment and facilities",
+        "text": "a playground with swings, slides, climbing frames or other play equipment"
+      },
+      {
+        "id": "information_culture",
+        "label": "Information, art and heritage",
+        "text": "an information board, public notice board, artwork, monument or memorial"
+      },
+      {
+        "id": "religious",
+        "label": "Religious objects and places",
+        "text": "a Shinto shrine, Buddhist temple, church, mosque, torii gate or religious statue"
+      },
+      {
+        "id": "emergency",
+        "label": "Emergency equipment",
+        "text": "a fire hydrant, fire extinguisher, emergency phone or defibrillator"
+      }
+    ],
+    "otherLabels": [
+      {
+        "id": "person",
+        "label": "Person or selfie",
+        "text": "a person, a portrait or a selfie"
+      },
+      {
+        "id": "document",
+        "label": "Document or screenshot",
+        "text": "a document, a screen or a screenshot"
+      },
+      {
+        "id": "food",
+        "label": "Food close-up",
+        "text": "a close-up of food or a meal"
+      },
+      {
+        "id": "animal",
+        "label": "Animal close-up",
+        "text": "a close-up of an animal or pet"
+      },
+      {
+        "id": "household",
+        "label": "Household object close-up",
+        "text": "a close-up of a household object indoors"
+      },
+      {
+        "id": "unusable",
+        "label": "Unclear photo",
+        "text": "an unclear, blurry or obstructed scene"
+      }
+    ]
+  }
+}
