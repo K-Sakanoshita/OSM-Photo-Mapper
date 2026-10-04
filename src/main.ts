@@ -500,7 +500,7 @@ class App {
     const photoInput = el('input', {
       type: 'file',
       accept: 'image/*',
-      capture: 'environment',
+      // Let mobile browsers open the photo picker; camera capture has its own button.
       style: 'display:none',
       onchange: () => void this.onPhotoTaken(photoInput)
     });
