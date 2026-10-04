@@ -1494,7 +1494,7 @@ class App {
         : 'No candidates yet. Add a pin on the map, or capture photos and press Map photos.')] : []),
       ...(s.photos.length > 0 ? [this.buildPhotoGallery(s.photos), el('button', { class: 'btn', onclick: () => { this.mode = 'analysis'; this.render(); } }, 'Analyze photos again')] : []),
       el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
-      ...cards
+      el('div', { class: 'candidate-grid' }, ...cards)
     );
   }
 
