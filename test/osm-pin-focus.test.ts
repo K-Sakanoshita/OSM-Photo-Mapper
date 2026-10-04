@@ -19,7 +19,8 @@ describe('show nearby OSM pin', () => {
     const view = Object.assign(Object.create(MapView.prototype), {
       map: { getSource: () => undefined, flyTo },
       osmMarkers: [node, way], selectedCandidateId: null, focusedOsmId: null,
-      candidateData: { type: 'FeatureCollection', features: [] }
+      candidateData: { type: 'FeatureCollection', features: [] },
+      uncertaintyData: { type: 'FeatureCollection', features: [] }
     }) as MapView;
     const match = { osmId: 1, osmType: 'node', lat: 34, lon: 135 } as FeatureCandidate['osmMatches'][number];
     view.showOsmMatch(match);
