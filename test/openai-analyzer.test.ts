@@ -307,6 +307,16 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     await a.analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
     const body = JSON.parse(lastInit!.body as string);
     expect(body.model).toBe('gpt-4o');
+    expect(body).not.toHaveProperty('temperature');
+  });
+
+  it.each(['gpt-6-luna', 'gpt-6.1-sol'])('omits unsupported sampling parameters for %s', async (model) => {
+    const a = analyzer(undefined, { model });
+    await a.analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    const body = JSON.parse(lastInit!.body as string);
+    expect(body.model).toBe(model);
+    expect(body).not.toHaveProperty('temperature');
+    expect(body.text.format.type).toBe('json_schema');
   });
 });
 

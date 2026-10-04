@@ -212,7 +212,6 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
 
     return {
       model: this.model,
-      temperature: 0,
       instructions,
       input: [
         {
