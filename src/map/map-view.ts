@@ -34,6 +34,16 @@ export class MapView {
   ) {
     this.map = new maplibregl.Map({
       container,
+      locale: {
+        'Map.Title': t('Map'),
+        'NavigationControl.ZoomIn': t('Zoom in'),
+        'NavigationControl.ZoomOut': t('Zoom out'),
+        'NavigationControl.ResetBearing': t('Reset bearing to north'),
+        'GeolocateControl.FindMyLocation': t('Find my location'),
+        'GeolocateControl.LocationNotAvailable': t('Location not available'),
+        'AttributionControl.ToggleAttribution': t('Toggle attribution'),
+        'Popup.Close': t('Close popup')
+      },
       style: appAssetUrl('tiles/osmfj_poi.json'),
       center: [139.767, 35.681],
       zoom: 15

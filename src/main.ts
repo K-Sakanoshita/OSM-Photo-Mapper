@@ -115,7 +115,7 @@ function confSpan(kind: string, value: number): HTMLElement {
   return el(
     'span',
     { class: 'conf' + (value < 0.5 ? ' low' : ''), title: `${kind} confidence` },
-    `${kind} ${Math.round(value * 100)}%`
+    `${t(kind)} ${Math.round(value * 100)}%`
   );
 }
 
@@ -659,7 +659,7 @@ class App {
           ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
           el('div', { class: 'row' }, `Captured: ${new Date(photo.timestamp).toLocaleString()} (${photo.timestampSource ?? 'unknown time source'})`),
           el('div', { class: 'row' }, photo.cameraPosition
-            ? `Camera: ${describeCameraPosition(photo.cameraPosition)} @ ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
+            ? `Camera: ${t(describeCameraPosition(photo.cameraPosition))} @ ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
             : 'Camera: no GPS'),
           el('div', { class: 'row' }, `Note: ${photo.note || 'none'}`),
           el('div', { class: 'row' }, `Associated candidates: ${related.length}`),
@@ -766,11 +766,11 @@ class App {
     const state = classifyGps(fix, now);
     const photoPosition = [...s.photos].reverse().find((p) => p.cameraPosition)?.cameraPosition;
     const photoNote = photoPosition
-      ? `Photo ${describeCameraPosition(photoPosition)}: ${photoPosition.lat.toFixed(5)}, ${photoPosition.lon.toFixed(5)}`
+      ? `Photo ${t(describeCameraPosition(photoPosition))}: ${photoPosition.lat.toFixed(5)}, ${photoPosition.lon.toFixed(5)}`
       : '';
     this.gpsStatus.textContent = t(!fix && photoNote
       ? `Live GPS unavailable · ${photoNote}`
-      : formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live') + (photoNote ? ` · ${photoNote}` : ''));
+      : t(formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live')) + (photoNote ? ` · ${t(photoNote)}` : ''));
     this.gpsStatus.className = `gps-status gps-${!fix && photoNote ? 'photo' : state}`;
   }
 
@@ -830,7 +830,7 @@ class App {
     const srcNote =
       photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
     const camNote = photo.cameraPosition
-      ? ` · cam: ${describeCameraPosition(photo.cameraPosition)} ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
+      ? ` · cam: ${t(describeCameraPosition(photo.cameraPosition))} ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
       : ' · no GPS — needs manual positioning';
     let hdgNote = '';
     if (photo.cameraHeading) {
@@ -1582,7 +1582,7 @@ class App {
       appendLocalized(card, el('div', { class: 'row' },
         `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
         `Distance: ${obs.distanceEstimate == null ? 'unknown' : `${obs.distanceEstimate.toFixed(0)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(0)} m`}`} · `,
-        `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : 'none'}`
+        `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : t('none')}`
       ));
       appendLocalized(card, el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
     }
@@ -1668,7 +1668,7 @@ class App {
         { class: 'row cam-row' },
         el('b', {}, 'Camera'),
         cam
-          ? ` ${describeCameraPosition(cam)} @ ${cam.lat.toFixed(5)}, ${cam.lon.toFixed(5)}`
+          ? ` ${t(describeCameraPosition(cam))} @ ${cam.lat.toFixed(5)}, ${cam.lon.toFixed(5)}`
           : ' no GPS — position needs manual placement.'
       )
     );
@@ -1718,7 +1718,7 @@ class App {
           'div',
           { class: 'row heading-row' },
           el('b', {}, 'Cam heading'),
-          ` ${ch.bearing.toFixed(0)}° · ${ch.source} · ±${ch.uncertaintyDeg}° · age ${Math.round(ch.ageMs / 1000)} s${ch.detail ? ` · ${ch.detail}` : ''}`
+          ` ${ch.bearing.toFixed(0)}° · ${t(ch.source)} · ±${ch.uncertaintyDeg}° · ${t(`age ${Math.round(ch.ageMs / 1000)} s`)}${ch.detail ? ` · ${t(ch.detail)}` : ''}`
         )
       );
     } else if (hdgPhoto?.headingNote) {
@@ -1727,7 +1727,7 @@ class App {
           'div',
           { class: 'row heading-row heading-missing' },
           el('b', {}, 'Cam heading'),
-          ` none — ${hdgPhoto.headingNote}`
+          ` ${t(`none — ${hdgPhoto.headingNote}`)}`
         )
       );
     }
@@ -1754,7 +1754,7 @@ class App {
       if (ps.snappedPosition && ps.linkedOsmId != null) {
         steps.push(`snapped → osm/${ps.linkedOsmType ?? 'node'}/${ps.linkedOsmId} (${Math.round((ps.snapConfidence ?? 0) * 100)}%)`);
       }
-      const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
+      const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.map((step) => t(step)).join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
       for (const e of ps.evidence) {
         appendLocalized(solRow, el('span', { class: 'ev-chip', title: e.detail ?? e.label }, e.label));
       }

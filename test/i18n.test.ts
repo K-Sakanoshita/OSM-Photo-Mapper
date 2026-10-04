@@ -15,6 +15,18 @@ describe('language entry points', () => {
     expect(t('Note: Bench', 'ja')).toBe('メモ：Bench');
     expect(t('OpenAI API error 400: unsupported model', 'ja')).toBe('OpenAI API error 400: unsupported model');
   });
+  it('translates position diagnostics, nested review reasons and GPS status', () => {
+    expect(t('Detection: clock 46% · ', 'ja')).toBe('検出：clock 46% · ');
+    expect(t('Needs tag review: select a defining value: playground=*', 'ja'))
+      .toBe('タグの確認が必要：種類を表す値を選択してください：playground=*');
+    expect(t(' none — No geographic heading (Not started)', 'ja'))
+      .toBe(' なし — 地理的な方位なし（未開始）');
+    expect(t('GPS ready: 34.17733, 134.60637 · ±10 m · 2 s · live · track 3', 'ja'))
+      .toBe('GPS取得済み：34.17733, 134.60637 · ±10 m · 2秒前 · 現在の測位 · 軌跡3件');
+    expect(t('estimate 34.17733, 134.60637', 'ja')).toBe('推定 34.17733, 134.60637');
+    expect(t('GPS accuracy is coarse (mean ~30 m).', 'en'))
+      .toBe('GPS accuracy is coarse (mean ~30 m).');
+  });
   it('resolves shared assets from either locale under a GitHub Pages subpath', () => {
     for (const page of ['https://example.com/mapper/', 'https://example.com/mapper/index.html',
       'https://example.com/mapper/en', 'https://example.com/mapper/en/', 'https://example.com/mapper/en/index.html']) {
