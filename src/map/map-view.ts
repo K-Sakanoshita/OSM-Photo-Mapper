@@ -1,5 +1,6 @@
 import maplibregl from 'maplibre-gl';
 import type { FeatureCandidate, GpsSample, Photo, Survey } from '../types';
+import { iconForTags, iconUrl } from './tag-icon';
 
 /**
  * MapLibre GL view for the survey map.
@@ -20,6 +21,7 @@ export class MapView {
   private photoSourceId = 'photos-source';
   private photoData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private osmMarkers: maplibregl.Marker[] = [];
+  private loadingIcons = new Set<string>();
 
   constructor(
     container: HTMLElement,
@@ -30,7 +32,7 @@ export class MapView {
   ) {
     this.map = new maplibregl.Map({
       container,
-      style: new URL('./osmfj_nopoi.json', document.baseURI).href,
+      style: new URL('./tiles/osmfj_poi.json', document.baseURI).href,
       center: [139.767, 35.681],
       zoom: 15
     });
@@ -72,12 +74,17 @@ export class MapView {
         type: 'circle',
         source: this.candidateSourceId,
         paint: {
-          'circle-radius': 15,
+          'circle-radius': 21,
           'circle-color': ['get', 'color'],
           'circle-stroke-width': 3,
           'circle-stroke-color': '#ffffff'
         }
       });
+      this.map.addLayer({
+        id: 'candidate-icons', type: 'symbol', source: this.candidateSourceId,
+        layout: { 'icon-image': ['get', 'icon'], 'icon-size': 1, 'icon-allow-overlap': true, 'icon-ignore-placement': true }
+      });
+      this.map.on('styleimagemissing', (event) => void this.loadIcon(event.id));
       (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource).setData(this.candidateData);
 
       this.enableDragging();
@@ -141,7 +148,16 @@ export class MapView {
     for (const [id, { match, merged }] of objects) {
         const content = document.createElement('div');
         content.textContent = `${merged ? 'Merged · ' : ''}${id} · ${Object.entries(match.tags).map(([key, value]) => `${key}=${value}`).join(' ')}`;
-        this.osmMarkers.push(new maplibregl.Marker({ color: merged ? '#2e8b57' : '#8e44ad', scale: 1.2 })
+        const element = document.createElement('div');
+        element.className = 'osm-icon-pin';
+        element.title = `${merged ? 'Merged · ' : ''}${id}`;
+        element.style.cssText = `width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:white;border:4px solid ${merged ? '#2e8b57' : '#8e44ad'};box-sizing:border-box;cursor:pointer;box-shadow:0 1px 4px #555;`;
+        const image = document.createElement('img');
+        image.src = iconUrl(iconForTags(match.tags));
+        image.alt = id;
+        image.style.cssText = 'width:32px;height:32px;object-fit:contain;pointer-events:none;';
+        element.append(image);
+        this.osmMarkers.push(new maplibregl.Marker({ element, anchor: 'center' })
           .setLngLat([match.lon, match.lat])
           .setPopup(new maplibregl.Popup({ offset: 30 }).setDOMContent(content))
           .addTo(this.map));
@@ -153,6 +169,7 @@ export class MapView {
         type: 'Feature' as const,
         properties: {
           id: c.id,
+          icon: iconForTags(c.tags),
           status: c.status,
           color: this.statusColor(c.status),
           positionConfidence: c.positionConfidence,
@@ -165,6 +182,19 @@ export class MapView {
       features
     };
     (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
+  }
+
+  private async loadIcon(filename: string): Promise<void> {
+    if (!/^[\w.-]+\.png$/.test(filename) || this.loadingIcons.has(filename) || this.map.hasImage(filename)) return;
+    this.loadingIcons.add(filename);
+    try {
+      const image = await this.map.loadImage(iconUrl(filename));
+      if (this.map.getStyle() && !this.map.hasImage(filename)) this.map.addImage(filename, image.data, { pixelRatio: 2 });
+    } catch {
+      // The colored, draggable candidate circle remains usable if an icon fails.
+    } finally {
+      this.loadingIcons.delete(filename);
+    }
   }
 
   /**

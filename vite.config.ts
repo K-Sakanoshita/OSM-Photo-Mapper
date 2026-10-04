@@ -1,9 +1,19 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { cpSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   base: './',
   plugins: [
+    {
+      name: 'map-data-assets',
+      writeBundle(options) {
+        for (const directory of ['icon', 'tiles', 'data']) {
+          cpSync(resolve(directory), resolve(options.dir ?? 'dist', directory), { recursive: true });
+        }
+      }
+    },
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
@@ -35,6 +45,11 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,json,svg,woff2}'],
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.includes('/icon/'),
+            handler: 'CacheFirst',
+            options: { cacheName: 'poi-icons', expiration: { maxEntries: 500 } }
+          },
           {
             urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
             handler: 'NetworkOnly'
