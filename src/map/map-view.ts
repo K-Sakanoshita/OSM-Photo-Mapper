@@ -360,7 +360,7 @@ export class MapView {
     }
     const bounds = new maplibregl.LngLatBounds();
     for (const p of pts) bounds.extend(p);
-    this.map.fitBounds(bounds, { padding: 60, maxZoom: 19 });
+    this.map.fitBounds(bounds, { padding: 60, maxZoom: 19, duration: 0 });
   }
 
   remove(): void {
