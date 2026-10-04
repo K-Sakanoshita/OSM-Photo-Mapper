@@ -39,6 +39,7 @@ import {
 import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
 import { distanceMeters, estimatePosition, rayFromPhoto } from './analysis/position';
+import { mergeCandidateWithOsm } from './osm/merge-candidate';
 import { selectProvider } from './imagery/providers';
 import type {
   CandidateStatus,
@@ -1933,8 +1934,8 @@ class App {
         el(
           'div',
           { class: 'osm-matches' },
-          'Nearby in OSM (purple pins; distance from current pin; score is not identity confidence):',
-          ...c.osmMatches.map((m) => this.buildOsmMatchRow(c, m))
+          c.status === 'existing' ? 'Merged with OSM (green pin):' : 'Drag the analyzed pin onto a purple OSM pin to merge (distance from current pin; score is not identity confidence):',
+          ...c.osmMatches.filter((m) => c.status !== 'existing' || (m.osmId === c.linkedOsmId && m.osmType === (c.linkedOsmType ?? 'node'))).map((m) => this.buildOsmMatchRow(c, m))
         )
       );
     }
@@ -2001,15 +2002,7 @@ class App {
         class: 'link-btn',
         onclick: () => this.mapView.map.flyTo({ center: [m.lon, m.lat], zoom: 19 })
       }, 'Show on map'),
-      el(
-        'button',
-        {
-          class: 'link-btn',
-          disabled: linked,
-          onclick: linked ? undefined : () => void this.onLinkExisting(c, m)
-        },
-        linked ? 'Linked' : 'Link'
-      )
+      ...(linked ? [el('span', {}, 'Merged')] : [])
     );
   }
 
@@ -2114,6 +2107,16 @@ class App {
     const s = this.survey;
     const c = s?.candidates.find((x) => x.id === id);
     if (!s || !c) return;
+    const dropped = this.mapView.map.project([lon, lat]);
+    const target = c.osmMatches
+      .map((match) => ({ match, point: this.mapView.map.project([match.lon, match.lat]) }))
+      .map(({ match, point }) => ({ match, distance: Math.hypot(point.x - dropped.x, point.y - dropped.y) }))
+      .filter(({ distance }) => distance <= 24)
+      .sort((a, b) => a.distance - b.distance)[0]?.match;
+    if (target) {
+      await this.onLinkExisting(c, target);
+      return;
+    }
     c.lat = lat;
     c.lon = lon;
     c.positionConfidence = Math.min(c.positionConfidence, 0.3);
@@ -2204,11 +2207,10 @@ class App {
   }
 
   private async onLinkExisting(c: FeatureCandidate, m: OsmMatch): Promise<void> {
-    c.linkedOsmId = m.osmId;
-    c.linkedOsmType = m.osmType;
-    c.status = 'existing';
+    mergeCandidateWithOsm(c, m);
     await surveyDb.updateCandidate(c);
-    toast(`Linked to ${m.osmType}/${m.osmId}`);
+    if (this.survey) this.mapView.setCandidates(this.survey.candidates);
+    toast(`Merged with ${m.osmType}/${m.osmId}`);
     this.refreshCandidateEditor();
   }
 

@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { buildOsmChange } from '../src/osm/osmchange';
+import { mergeCandidateWithOsm } from '../src/osm/merge-candidate';
 import type { LiveOsmObject } from '../src/osm/osm-api';
 import type { FeatureCandidate, Survey } from '../src/types';
 
 let n = 0;
+it('merges a dragged candidate into the selected OSM ID and exports a modify with combined tags', () => {
+  const c = candidate({ featureType: 'playground', tags: { playground: 'swing', material: 'metal' } });
+  const match = { osmType: 'node' as const, osmId: 123, lat: 35.7, lon: 139.8,
+    tags: { playground: 'basketswing', name: 'Existing name', operator: 'City' }, matchScore: 0.98 };
+  c.osmMatches = [match, { ...match, osmId: 456 }];
+  mergeCandidateWithOsm(c, match);
+  expect(c).toMatchObject({ status: 'existing', linkedOsmId: 123, linkedOsmType: 'node', lat: 35.7, lon: 139.8,
+    tags: { playground: 'swing', material: 'metal', name: 'Existing name', operator: 'City' }, osmMatches: [match] });
+  const result = buildOsmChange(survey([c]), new Map([['node/123', liveNode(123, 4, match.tags)]]));
+  expect(result.xml).toContain('<modify>');
+  expect(result.xml).toContain('id="123" version="4"');
+  expect(result.xml).toContain('k="playground" v="swing"');
+  expect(result.xml).toContain('k="operator" v="City"');
+  expect(result.xml).not.toContain('<create>');
+});
 function candidate(overrides: Partial<FeatureCandidate> = {}): FeatureCandidate {
   n += 1;
   return {
