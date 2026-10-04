@@ -288,7 +288,9 @@
     "Choose tag value": "タグのvalueを選択",
     "Choose key / enter manually": "keyを選択／手入力",
     "Choose value / enter manually": "valueを選択／手入力",
-    "Save tag": "タグを保存"
+    "Save tag": "タグを保存",
+    "Select the original photo from Files to preserve EXIF GPS": "EXIFのGPS情報を保持するため、「ファイル」から元写真を選択してください",
+    "Select an image file": "画像ファイルを選択してください"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

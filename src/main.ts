@@ -478,8 +478,9 @@ class App {
 
     const photoInput = el('input', {
       type: 'file',
-      accept: 'image/*',
-      // Let mobile browsers open the photo picker; camera capture has its own button.
+      // A general file picker lets users choose original camera files instead
+      // of a mobile media provider's potentially GPS-redacted photo copy.
+      accept: '*/*',
       style: 'display:none',
       onchange: () => void this.onPhotoTaken(photoInput)
     });
@@ -488,6 +489,7 @@ class App {
       'button',
       {
         class: 'btn accent',
+        title: 'Select the original photo from Files to preserve EXIF GPS',
         onclick: () => {
           // Issue #10: start the one-shot GPS fix and open the camera/file
           // input IN THE SAME user gesture. Awaiting the fix first would
@@ -736,6 +738,10 @@ class App {
     const file = input.files?.[0];
     if (!s || !file) return;
     input.value = '';
+    if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?)$/i.test(file.name)) {
+      toast('Select an image file');
+      return;
+    }
 
     const noteEl = this.bottombar.querySelector<HTMLInputElement>('#photo-note');
     try {
@@ -1662,7 +1668,7 @@ class App {
     }
     for (const photo of missingGpsPhotos) {
       const fileInput = el('input', {
-        type: 'file', accept: 'image/jpeg,image/*', 'aria-label': 'Select original photo to restore GPS',
+        type: 'file', accept: '*/*', 'aria-label': 'Select original photo to restore GPS',
         onchange: async () => {
           const file = fileInput.files?.[0];
           if (file) await this.onRestorePhotoGps(photo, file);
