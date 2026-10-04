@@ -141,6 +141,7 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     expect(body.instructions).toContain('foreground, background, edges, and partly occluded objects');
     expect(body.instructions).toContain('multiple features of the same class');
     expect(body.instructions).toContain('include a value when clearly identifiable');
+    expect(body.instructions).toContain('do not substitute equipment=swing or type=swing');
     expect(body.instructions).toContain('unknown');
     // The image + prompt travel as input message items.
     const msg = inputMessage(body);

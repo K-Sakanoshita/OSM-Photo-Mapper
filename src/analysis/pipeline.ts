@@ -287,10 +287,34 @@ function toObservation(
 
   const tagSuggestions: Record<string, string> = { ...defaultTagsFor(featureType) };
   let detectedAttributes: Record<string, string> | undefined;
+  const attributes = { ...vis.attributes };
+  let conflictingPlaygroundSubtype = false;
 
-  if (cls && cls.autoTag && Object.keys(vis.attributes).length > 0) {
+  // Vision models sometimes describe the visible equipment as
+  // equipment=swing. This is evidence, not an OSM tag: only the
+  // playground class may translate a valid subtype to playground=*.
+  if (featureType === 'playground' && attributes.equipment) {
+    const equipment = attributes.equipment;
+    const allowed = cls?.commonValues?.playground ?? [];
+    if (allowed.includes(equipment)) {
+      if (!attributes.playground) {
+        attributes.playground = equipment;
+        delete attributes.equipment;
+      } else if (attributes.playground === equipment) {
+        delete attributes.equipment;
+      } else {
+        conflictingPlaygroundSubtype = true;
+      }
+    }
+  }
+
+  if (cls && cls.autoTag && Object.keys(attributes).length > 0) {
     const confirmable = confirmableKeysFor(cls);
-    for (const [key, value] of Object.entries(vis.attributes)) {
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key === 'playground' && conflictingPlaygroundSubtype) {
+        detectedAttributes = { ...(detectedAttributes ?? {}), [key]: value };
+        continue;
+      }
       if (!confirmable.has(key)) {
         // Outside the class tag policy -> unconfirmed evidence.
         detectedAttributes = { ...(detectedAttributes ?? {}), [key]: value };
@@ -309,9 +333,9 @@ function toObservation(
       }
       tagSuggestions[key] = value;
     }
-  } else if (Object.keys(vis.attributes).length > 0) {
+  } else if (Object.keys(attributes).length > 0) {
     // Review-only / unknown classes: nothing is applied automatically.
-    detectedAttributes = { ...vis.attributes };
+    detectedAttributes = attributes;
   }
 
   return {

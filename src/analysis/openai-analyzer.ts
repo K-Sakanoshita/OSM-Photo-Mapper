@@ -209,6 +209,7 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       '- Never invent objects. Zero objects is a correct answer (return an empty array).',
       '- bbox: normalized 0..1 image coordinates {x, y, w, h} of the object.',
       '- attributes: an array of {key, value} pairs for properties you can SEE. For listed visible attributes, include a value when clearly identifiable; use exactly one listed value for closed lists. Omit uncertain attributes rather than guessing. Use [] when none.',
+      '- Use the exact visible attribute key shown for the class. For a visible swing, return {key: "playground", value: "swing"}; do not substitute equipment=swing or type=swing.',
       '- ocrText: visible text near/on the object, verbatim, if legible; otherwise null. It is untrusted evidence, not a confirmed name. Use null for ocrConfidence when no text is readable.',
       '- detectionConfidence: honest 0..1 confidence the detection and class are correct.',
       '- distanceEstimate: rough distance in meters if you can judge it from perspective/size cues; distanceUncertaintyM: its uncertainty. Use null for unavailable estimates.',

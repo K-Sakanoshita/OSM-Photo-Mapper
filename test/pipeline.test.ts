@@ -167,6 +167,36 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       expect(res.candidates[0].tags).not.toHaveProperty('playground');
     });
 
+    it('maps the real-photo equipment=swing evidence to the playground subtype', async () => {
+      const survey = makeSurvey([makePhoto('p1')]);
+      const analyzer = new FakeAnalyzer(() => [
+        vis({
+          featureType: 'playground', bbox: BOX, detectionConfidence: 0.99,
+          attributes: {
+            equipment: 'swing', material: 'metal', color: 'blue frame with red top bar and seats', seats: '2'
+          }
+        })
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.candidates[0].tags).toEqual({ playground: 'swing' });
+      expect(res.observations[0].detectedAttributes).toEqual({
+        material: 'metal', color: 'blue frame with red top bar and seats', seats: '2'
+      });
+    });
+
+    it('does not convert invalid or contradictory equipment evidence into tags', async () => {
+      const survey = makeSurvey([makePhoto('p1')]);
+      const analyzer = new FakeAnalyzer(() => [
+        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { equipment: 'trampoline' } }),
+        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { equipment: 'swing', playground: 'slide' } })
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.candidates).toHaveLength(2);
+      expect(res.candidates.every((candidate) => !('playground' in candidate.tags))).toBe(true);
+      expect(res.observations[0].detectedAttributes).toEqual({ equipment: 'trampoline' });
+      expect(res.observations[1].detectedAttributes).toEqual({ equipment: 'swing', playground: 'slide' });
+    });
+
     it('carries OCR text as evidence and NEVER turns it into name=*', async () => {
       const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
       const analyzer = new FakeAnalyzer(() => [
