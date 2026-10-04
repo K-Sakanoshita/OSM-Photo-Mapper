@@ -689,3 +689,8 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
 
 .photo-gallery-items { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px; }
 #camera-photos { width: 100%; }
+
+.analysis-status.running { display: flex; align-items: center; gap: 8px; }
+.analysis-spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid #cadbe5; border-top-color: var(--primary); border-radius: 50%; animation: analysis-spin 0.9s linear infinite; }
+@keyframes analysis-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .analysis-spinner { animation: none; } }

@@ -27,7 +27,7 @@ import {
 import { surveyDb } from './db/survey-db';
 import { SurveyAnalysisPipeline } from './analysis/pipeline';
 import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
-import { clearProxySettings, loadProxySettings, saveProxySettings } from './analysis/proxy-settings';
+import { loadProxySettings, saveProxySettings } from './analysis/proxy-settings';
 import type { ImageObservationAnalyzer } from './analysis/analyzer';
 import { annotateCandidate, fetchOsmInArea, type LatLon } from './osm/overpass';
 import { buildOsmChange } from './osm/osmchange';
@@ -189,7 +189,7 @@ class App {
     const savedProxy = loadProxySettings(this.proxyStorage());
     this.proxySettingsAvailable = savedProxy.available;
     if (savedProxy.settings) {
-      this.openaiProxyEndpoint = savedProxy.settings.endpoint;
+      this.openaiProxyEndpoint = savedProxy.settings.endpoint.trim() || this.openaiProxyEndpoint;
       this.openaiProxyAuth = savedProxy.settings.token;
     }
     const app = document.getElementById('app');
@@ -248,18 +248,6 @@ class App {
     if (note) note.textContent = t(this.proxySettingsAvailable
       ? 'Proxy settings entered here are saved on this device. A saved token grants use of the proxy; do not use this on a shared device.'
       : 'Device storage is unavailable. Proxy settings are held in memory and will be lost on reload.');
-  }
-
-  private forgetProxySettings(endpointInput: HTMLInputElement, authInput: HTMLInputElement): void {
-    this.proxySettingsAvailable = clearProxySettings(this.proxyStorage());
-    this.openaiProxyEndpoint = '';
-    this.openaiProxyAuth = '';
-    endpointInput.value = '';
-    authInput.value = '';
-    this.updateProxyStorageNote();
-    toast(this.proxySettingsAvailable
-      ? 'Proxy endpoint and token cleared from this device'
-      : 'Proxy fields cleared; device storage could not be updated');
   }
 
   /** Reset any persisted `recording` flags left behind by crashed sessions. */
@@ -324,6 +312,7 @@ class App {
   }
 
   private goBack(): void {
+    if (this.analyzing) return;
     switch (this.mode) {
       case 'survey':
         this.stopRecordingNow();
@@ -1043,6 +1032,7 @@ class App {
     this.analysisProgress = `0/${photoIds?.length ?? s.photos.length}`;
     this.analysisResult = null;
     this.updateAnalysisProgressDom();
+    this.updateAnalysisResultDom();
 
     const pipeline = new SurveyAnalysisPipeline(analyzer);
     try {
@@ -1237,17 +1227,6 @@ class App {
     // (import.meta.env.PROD is statically true in `vite build`; the
     // dev server and tests keep the developer-only direct option.)
     const isProd = import.meta.env.PROD;
-    const endpointInput = el('input', {
-      type: 'url',
-      id: 'openai-proxy-endpoint',
-      class: 'note-input',
-      placeholder: 'https://your-proxy.example/responses',
-      value: this.openaiProxyEndpoint,
-      oninput: () => {
-        this.openaiProxyEndpoint = (endpointInput as HTMLInputElement).value;
-        this.persistProxySettings();
-      }
-    });
     const authInput = el('input', {
       type: 'password',
       id: 'openai-proxy-auth',
@@ -1270,14 +1249,8 @@ class App {
     const proxyFields = el(
       'div',
       { class: 'transport-fields', 'data-transport': 'proxy' },
-      el('div', { class: 'field' }, el('label', { for: 'openai-proxy-endpoint' }, 'Proxy endpoint'), endpointInput),
       el('div', { class: 'field' }, el('label', { for: 'openai-proxy-auth' }, 'Proxy token'), authInput),
-      el('div', { id: 'proxy-storage-note', class: 'hint warn' }),
-      el('button', {
-        type: 'button',
-        class: 'btn small',
-        onclick: () => this.forgetProxySettings(endpointInput as HTMLInputElement, authInput as HTMLInputElement)
-      }, 'Forget / Clear proxy settings')
+      el('div', { id: 'proxy-storage-note', class: 'hint warn' })
     );
     const modelField = el('div', { class: 'field' }, el('label', { for: 'openai-model' }, 'Model'), modelInput);
     let openaiPanel: TagEl<'div'>;
@@ -1287,11 +1260,6 @@ class App {
       openaiPanel = el(
         'div',
         { class: 'analyzer-panel' },
-        el(
-          'div',
-          { class: 'hint' },
-          'Transport: proxy (this public build is proxy-only — issue #12). The OpenAI key stays on the proxy server and never reaches this browser. Configure your proxy endpoint below.'
-        ),
         proxyFields,
         modelField
       );
@@ -1362,8 +1330,6 @@ class App {
       el(
         'div',
         { class: 'analysis-screen' },
-        el('div', { class: 'section-title' }, 'Analyzer'),
-        el('div', {}, 'OpenAI vision (BYOK / proxy)'),
         openaiPanel,
         this.buildPhotoGallery(s.photos),
         el('div', { class: 'section-title' }, 'Batch progress'),
@@ -1388,14 +1354,33 @@ class App {
     this.updateAnalysisResultDom();
   }
 
+  private updateAnalysisControls(): void {
+    const controls = [this.backBtn as HTMLButtonElement, ...this.content.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select'),
+      ...this.bottombar.querySelectorAll<HTMLButtonElement>('button')];
+    for (const control of controls) {
+      if (this.analyzing) {
+        if (control.dataset.analysisDisabled == null) control.dataset.analysisDisabled = String(control.disabled);
+        control.disabled = true;
+      } else if (control.dataset.analysisDisabled != null) {
+        control.disabled = control.dataset.analysisDisabled === 'true';
+        delete control.dataset.analysisDisabled;
+      }
+    }
+    const button = this.bottombar.querySelector<HTMLButtonElement>('#analyze-btn');
+    if (button) button.disabled = this.analyzing || !this.survey?.photos.length;
+    this.content.setAttribute('aria-busy', String(this.analyzing));
+  }
+
   /** Live batch progress (issue #2): in-place DOM update so input focus
    *  is preserved while photos are processed one by one. */
   private updateAnalysisProgressDom(): void {
+    this.updateAnalysisControls();
     const box = this.content.querySelector<HTMLElement>('#analysis-progress');
     if (!box) return;
     const lines: Node[] = [];
     if (this.analyzing) {
-      lines.push(el('div', { class: 'analysis-status running' }, `Analyzing ${this.analysisProgress}…`));
+      lines.push(el('div', { class: 'analysis-status running', role: 'status', 'aria-live': 'polite' },
+        el('span', { class: 'analysis-spinner', 'aria-hidden': 'true' }), `Analyzing ${this.analysisProgress}…`));
     }
     for (const st of this.analysisStatuses) {
       if (st.status === 'ok') {
@@ -1415,10 +1400,9 @@ class App {
 
   /** Result summary + retry affordance for failed photos (issue #2). */
   private updateAnalysisResultDom(): void {
+    this.updateAnalysisControls();
     const box = this.content.querySelector<HTMLElement>('#analysis-result');
     if (!box) return;
-    const btn = this.bottombar.querySelector<HTMLButtonElement>('#analyze-btn');
-    if (btn) btn.disabled = this.analyzing;
 
     const result = this.analysisResult;
     if (this.analyzing || !result) {
