@@ -19,6 +19,7 @@ export class MapView {
   private photoLayerId = 'photos';
   private photoSourceId = 'photos-source';
   private photoData: GeoJSON.FeatureCollection = emptyFeatureCollection();
+  private osmMarkers: maplibregl.Marker[] = [];
 
   constructor(
     container: HTMLElement,
@@ -124,6 +125,22 @@ export class MapView {
   }
 
   setCandidates(candidates: FeatureCandidate[]): void {
+    for (const marker of this.osmMarkers) marker.remove();
+    this.osmMarkers = [];
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      for (const match of candidate.osmMatches) {
+        const id = `${match.osmType}/${match.osmId}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const content = document.createElement('div');
+        content.textContent = `${id} · ${Object.entries(match.tags).map(([key, value]) => `${key}=${value}`).join(' ')}`;
+        this.osmMarkers.push(new maplibregl.Marker({ color: '#8e44ad', scale: 1.2 })
+          .setLngLat([match.lon, match.lat])
+          .setPopup(new maplibregl.Popup({ offset: 30 }).setDOMContent(content))
+          .addTo(this.map));
+      }
+    }
     const features = candidates
       .filter((c) => c.lat != null && c.lon != null)
       .map((c) => ({

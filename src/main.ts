@@ -1933,7 +1933,7 @@ class App {
         el(
           'div',
           { class: 'osm-matches' },
-          'Nearby in OSM (distance from current pin; score is not identity confidence):',
+          'Nearby in OSM (purple pins; distance from current pin; score is not identity confidence):',
           ...c.osmMatches.map((m) => this.buildOsmMatchRow(c, m))
         )
       );
@@ -1997,6 +1997,10 @@ class App {
       'div',
       { class: 'osm-match' + (linked ? ' linked' : '') },
       el('div', { class: 'm-meta' }, `${m.osmType}/${m.osmId} · ${distance} · Score ${Math.round(m.matchScore * 100)}% · ${tagPreview}`),
+      el('button', {
+        class: 'link-btn',
+        onclick: () => this.mapView.map.flyTo({ center: [m.lon, m.lat], zoom: 19 })
+      }, 'Show on map'),
       el(
         'button',
         {
