@@ -4,6 +4,8 @@ export interface PinUndo {
   candidateId: string;
   label: string;
   before?: Partial<FeatureCandidate>;
+  deleted?: FeatureCandidate;
+  index?: number;
 }
 
 export function pinUndoBefore(candidate: FeatureCandidate, merge = false): PinUndo {
@@ -19,6 +21,7 @@ export function pinUndoBefore(candidate: FeatureCandidate, merge = false): PinUn
   };
 }
 
-export function restorePinUndo(entry: PinUndo, current: FeatureCandidate): FeatureCandidate | undefined {
-  return entry.before ? { ...current, ...structuredClone(entry.before) } : undefined;
+export function restorePinUndo(entry: PinUndo, current?: FeatureCandidate): FeatureCandidate | undefined {
+  if (entry.deleted) return structuredClone(entry.deleted);
+  return entry.before && current ? { ...current, ...structuredClone(entry.before) } : undefined;
 }

@@ -142,7 +142,7 @@ Feature candidate
   ├─ ピン移動
   ├─ タグ追加・編集・削除
   ├─ name の修正
-  ├─ New / Existing / Excluded の判断
+  ├─ New / Existing の判断・不要なピンの削除（Undo可能）
   └─ 既存 OSM オブジェクトへのリンク
   │
   ▼

@@ -43,4 +43,14 @@ describe('pin undo', () => {
   it('removes a custom pin when undoing its addition', () => {
     expect(restorePinUndo({ candidateId: 'c1', label: 'Undo add pin' }, candidate())).toBeUndefined();
   });
+  it('restores a deleted pin with its original ID, tags and OSM links', () => {
+    const original = candidate();
+    original.status = 'existing';
+    original.linkedOsmId = 42;
+    original.linkedOsmType = 'node';
+    const restored = restorePinUndo({ candidateId: original.id, label: 'Undo delete pin',
+      deleted: structuredClone(original), index: 0 });
+    expect(restored).toEqual(original);
+    expect(restored).not.toBe(original);
+  });
 });

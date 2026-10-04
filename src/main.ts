@@ -1536,7 +1536,8 @@ class App {
       'aria-label': 'Candidate status',
       onchange: () => void this.onStatusChange(c, statusSel)
     },
-      ...(['new', 'existing', 'excluded'] as CandidateStatus[]).map((v) =>
+      ...(c.status === 'excluded' ? [el('option', { value: 'excluded', disabled: true }, 'Not uploaded (saved)')] : []),
+      ...(['new', 'existing'] as CandidateStatus[]).map((v) =>
         el('option', { value: v }, v[0].toUpperCase() + v.slice(1))
       )
     );
@@ -1545,6 +1546,7 @@ class App {
     card.append(
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? (c.analyzer === 'manual' ? 'Custom tags' : c.featureType)), statusSel)
     );
+    card.append(el('button', { class: 'btn small', onclick: () => void this.onDeleteCandidate(c) }, 'Delete pin'));
     card.append(el('div', { class: 'row' }, `Source: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'manual' ? 'Placed manually on map' : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
     if (c.analyzer === 'manual') card.append(el('div', { class: 'row' }, 'No source photo — manually placed candidate'));
     if (c.analyzer === 'manual') {
@@ -1553,8 +1555,7 @@ class App {
         ...FEATURE_CLASSES.map((cls) => el('option', { value: cls.id }, cls.label))
       );
       classSelect.value = c.featureType;
-      card.append(el('div', { class: 'row' }, 'Feature type: ', classSelect),
-        el('button', { class: 'btn small', onclick: () => void this.onDeleteManualCandidate(c) }, 'Delete pin'));
+      card.append(el('div', { class: 'row' }, 'Feature type: ', classSelect));
     }
     if (c.analyzer !== 'manual') card.append(el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
     for (const obs of evidence) {
@@ -2138,13 +2139,18 @@ class App {
     this.refreshCandidateEditor();
   }
 
-  private async onDeleteManualCandidate(c: FeatureCandidate): Promise<void> {
-    if (!this.survey || c.analyzer !== 'manual') return;
+  private async onDeleteCandidate(c: FeatureCandidate): Promise<void> {
+    if (!this.survey) return;
+    const undo: PinUndo = { candidateId: c.id, label: 'Undo delete pin', deleted: structuredClone(c),
+      index: this.survey.candidates.findIndex((item) => item.id === c.id) };
     await surveyDb.deleteCandidate(c.id);
     this.survey.candidates = this.survey.candidates.filter((item) => item.id !== c.id);
+    this.recordPinUndo(this.survey.id, undo);
     if (this.selectedFieldCandidateId === c.id) this.selectedFieldCandidateId = null;
+    this.mapView.setSelectedCandidate(this.selectedFieldCandidateId);
     this.mapView.setCandidates(this.survey.candidates);
     this.refreshCandidateEditor();
+    toast('Pin deleted — use Undo to restore');
   }
 
   /** Issue #9: apply the OSM mapping chosen for a review-only candidate. */
@@ -2219,16 +2225,18 @@ class App {
     this.updateUndoButton();
     try {
       const current = s.candidates.find((c) => c.id === entry.candidateId);
-      if (current) {
-        const restored = restorePinUndo(entry, current);
-        if (restored) {
-          await surveyDb.updateCandidate(restored);
+      const restored = restorePinUndo(entry, current);
+      if (restored) {
+        await surveyDb.updateCandidate(restored);
+        if (current) {
           s.candidates = s.candidates.map((c) => c.id === restored.id ? restored : c);
         } else {
+          s.candidates.splice(entry.index ?? s.candidates.length, 0, restored);
+        }
+      } else if (current) {
           await surveyDb.deleteCandidate(current.id);
           s.candidates = s.candidates.filter((c) => c.id !== current.id);
           if (this.selectedFieldCandidateId === current.id) this.selectedFieldCandidateId = null;
-        }
       }
       history!.pop();
       this.placingCandidate = false;
@@ -2278,7 +2286,7 @@ class App {
     // blocked and reported explicitly.
     const modify = linked.filter((c) => (c.linkedOsmType ?? 'node') === 'node');
     const blocked = linked.filter((c) => (c.linkedOsmType ?? 'node') !== 'node');
-    const excluded = s.candidates.filter((c) => c.status === 'excluded');
+    const legacyOmitted = s.candidates.filter((c) => c.status === 'excluded');
     const orphan = s.candidates.filter((c) => c.status === 'new' && (c.lat == null || c.lon == null));
 
     const commentInput = el('input', {
@@ -2360,12 +2368,14 @@ class App {
       el(
         'div',
         { class: 'upload-section' },
-        el('h2', {}, `Excluded ${excluded.length} · Missing position ${orphan.length}`),
+        el('h2', {}, `Missing position ${orphan.length}`),
         el(
           'div',
           { class: 'row' },
-          'Excluded candidates and candidates without a position are not uploaded.'
-        )
+          'Candidates without a position are not uploaded.'
+        ),
+        ...(legacyOmitted.length ? [el('div', { class: 'row' },
+          `${legacyOmitted.length} previously omitted pin(s) remain unselected for upload. Select New or delete them in review.`)] : [])
       ),
       el(
         'div',
