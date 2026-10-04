@@ -18,7 +18,7 @@ compatibility_date = "2025-06-01"
 
 # Plain tunables (safe to keep in source — they cap spending, not secrets).
 [vars]
-ALLOWED_MODELS = "gpt-4o-mini"
+ALLOWED_MODELS = "gpt-4o-mini,gpt-6-luna,gpt-6.1-sol"
 MAX_IMAGE_CHARS = "4500000"
 MAX_IMAGES_PER_REQUEST = "1"
 MAX_OUTPUT_TOKENS = "2000"
