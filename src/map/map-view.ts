@@ -87,6 +87,7 @@ export class MapView {
       });
       this.map.on('styleimagemissing', (event) => void this.loadIcon(event.id));
       (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource).setData(this.candidateData);
+      void this.loadCandidateIcons();
 
       this.enableDragging();
       this.map.on('click', this.photoLayerId, (e) => {
@@ -189,6 +190,15 @@ export class MapView {
     };
     (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
     this.setSelectedCandidate(this.selectedCandidateId);
+    if (this.map.getSource(this.candidateSourceId)) void this.loadCandidateIcons();
+  }
+
+  private async loadCandidateIcons(): Promise<void> {
+    const icons = new Set(this.candidateData.features.map((feature) => feature.properties?.icon as string));
+    await Promise.all([...icons].filter(Boolean).map((filename) => this.loadIcon(filename)));
+    // Re-submit the latest data after the images are registered, including
+    // candidates supplied before the map finished loading.
+    (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
   }
 
   setSelectedCandidate(id: string | null): void {
