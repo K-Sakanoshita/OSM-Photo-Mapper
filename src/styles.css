@@ -106,38 +106,13 @@ body[data-mode='upload'] #map-wrap,
 /* In-app camera (issue #13 phase 2): the viewfinder takes the screen. */
 body[data-mode='camera'] #map-wrap { display: none; }
 
-.rec-badge {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 5;
-  background: rgba(192, 57, 43, 0.9);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 12px;
-  display: none;
-  align-items: center;
-  gap: 6px;
-}
-.rec-badge.on { display: flex; }
-.rec-badge .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #fff;
-  animation: pulse 1.2s infinite;
-}
-@keyframes pulse { 50% { opacity: 0.3; } }
-
 /* ---------- GPS readiness strip (issue #10) ---------- */
 .gps-status {
   position: absolute;
   top: 8px;
-  right: 8px;
+  left: 8px;
   z-index: 5;
-  max-width: 72%;
+  max-width: calc(100% - 72px);
   background: rgba(38, 50, 56, 0.85);
   color: #eceff1;
   font-size: 11px;
@@ -675,3 +650,5 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
 }
 .shutter-btn:active { transform: scale(0.94); }
 .shutter-btn:disabled { opacity: 0.5; pointer-events: none; }
+
+.gps-status.gps-acquiring { background: rgba(38, 50, 56, 0.88); }

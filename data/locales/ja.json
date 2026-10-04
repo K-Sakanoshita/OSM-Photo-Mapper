@@ -275,7 +275,10 @@
     "Find my location": "現在地を表示",
     "Location not available": "現在地を取得できません",
     "Toggle attribution": "地図の著作権表示を切り替え",
-    "Close popup": "ポップアップを閉じる"
+    "Close popup": "ポップアップを閉じる",
+    "GPS acquiring…": "GPS取得中…",
+    "GPS unavailable": "GPS取得不可",
+    "GPS on": "GPS ON"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",
@@ -347,6 +350,7 @@
     "moved {distance} m; score {score} vs {previous} at estimate": "{distance} m移動：評価値{score}（元の推定位置は{previous}）",
     "Open photo {number}": "写真{number}を開く",
     "{source} @ {coordinates}": "{source} @ {coordinates}",
-    "Remove {key}": "{key}を削除"
+    "Remove {key}": "{key}を削除",
+    "GPS track: {count} samples": "GPS軌跡：{count}件"
   }
 }

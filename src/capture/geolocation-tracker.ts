@@ -21,7 +21,8 @@ export class GeolocationTracker {
 
   constructor(
     private readonly surveyId: string,
-    private readonly onSample?: (sample: GpsSample) => void
+    private readonly onSample?: (sample: GpsSample) => void,
+    private readonly onError?: (error: GeolocationPositionError) => void
   ) {}
 
   /** Begin continuous recording. Resolves once the first fix arrives. */
@@ -48,7 +49,10 @@ export class GeolocationTracker {
           resolve();
         },
         (err) => {
-          this.stop();
+          // Temporary GPS loss can recover on the same watch. Permission
+          // denial cannot, so release that watch until the next survey session.
+          if (err.code === 1) this.stop();
+          this.onError?.(err);
           reject(err);
         },
         opts

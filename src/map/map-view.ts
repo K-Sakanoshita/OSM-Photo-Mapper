@@ -18,6 +18,7 @@ export class MapView {
   private candidateData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private trackLayerId = 'track';
   private trackSourceId = 'track-source';
+  private trackData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private photoLayerId = 'photos';
   private photoSourceId = 'photos-source';
   private photoData: GeoJSON.FeatureCollection = emptyFeatureCollection();
@@ -57,7 +58,7 @@ export class MapView {
     this.map.on('click', (e) => this.onMapSelected?.(e.lngLat.lat, e.lngLat.lng));
 
     this.map.on('load', () => {
-      this.map.addSource(this.trackSourceId, { type: 'geojson', data: emptyFeatureCollection() });
+      this.map.addSource(this.trackSourceId, { type: 'geojson', data: this.trackData });
       this.map.addLayer({
         id: this.trackLayerId,
         type: 'line',
@@ -126,7 +127,8 @@ export class MapView {
         ? { type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: coords } }
         : { type: 'Feature' as const, properties: {}, geometry: { type: 'Point' as const, coordinates: coords[0] ?? [0, 0] } };
     const src = this.map.getSource(this.trackSourceId) as maplibregl.GeoJSONSource | undefined;
-    if (src) src.setData({ type: 'FeatureCollection', features: coords.length ? [data] : [] });
+    this.trackData = { type: 'FeatureCollection', features: coords.length ? [data] : [] };
+    if (src) src.setData(this.trackData);
   }
 
   setPhotos(photos: Photo[]): void {

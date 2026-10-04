@@ -131,7 +131,6 @@ class App {
   private bottombar: HTMLElement;
   private title: HTMLElement;
   private backBtn: HTMLElement;
-  private recBadge: HTMLElement;
 
   private mode: Mode = 'list';
   private survey: Survey | null = null;
@@ -153,10 +152,8 @@ class App {
   /** One-shot GPS fix started when the in-app camera mode was opened
    *  (user gesture). Awaited with a short bound at the shutter. */
   private inappFix: Promise<OneShotFix | null> | null = null;
-  /** Latest live fix, used by the GPS status when not recording. */
-  private liveFix: OneShotFix | null = null;
   private gpsStatus: HTMLElement;
-  private gpsPollTimer: number | undefined;
+  private gpsState: 'acquiring' | 'unavailable' | 'active' = 'acquiring';
   private gpsTickTimer: number | undefined;
   private analyzing = false;
   private placingCandidate = false;
@@ -206,17 +203,9 @@ class App {
     const header = el('header', { class: 'topbar' }, this.backBtn, this.title,
       el('a', { class: 'language-link', href: appAssetUrl(language === 'ja' ? 'en/' : ''), lang: language === 'ja' ? 'en' : 'ja' }, language === 'ja' ? 'English' : '日本語'));
 
-    this.recBadge = el(
-      'div',
-      { id: 'rec-badge', class: 'rec-badge' },
-      el('span', { class: 'dot' }),
-      'REC'
-    );
-    // Issue #10: GPS readiness strip — visible on the survey screen
-    // regardless of Record mode, so missing GPS is never silent.
     this.gpsStatus = el('div', { id: 'gps-status', class: 'gps-status hidden', role: 'status' });
     this.undoButton = el('button', { class: 'btn pin-undo', disabled: true, onclick: () => void this.undoPinEdit() }, 'Undo');
-    const mapWrap = el('div', { id: 'map-wrap' }, el('div', { id: 'map' }), this.recBadge, this.gpsStatus, this.undoButton);
+    const mapWrap = el('div', { id: 'map-wrap' }, el('div', { id: 'map' }), this.gpsStatus, this.undoButton);
 
     this.content = el('div', { id: 'content' });
     this.bottombar = el('div', { id: 'bottombar' });
@@ -302,15 +291,11 @@ class App {
       this.content.classList.remove('field-inspector', 'open');
       this.content.style.bottom = '';
     }
-    this.updateRecBadge();
     this.updateUndoButton();
     this.mapView.setSelectedCandidate(this.selectedFieldCandidateId);
-    if (mode !== 'survey') this.stopGpsStatus();
+    if (mode === 'list') this.stopGpsStatus();
+    else this.startGpsStatus();
     requestAnimationFrame(() => this.mapView.map.resize());
-  }
-
-  private updateRecBadge(): void {
-    this.recBadge.classList.toggle('on', this.tracker != null && (this.mode === 'survey' || this.mode === 'camera'));
   }
 
   private render(): void {
@@ -438,8 +423,8 @@ class App {
     this.survey = survey;
     this.selectedFieldCandidateId = null;
     this.selectedFieldPhotoId = null;
-    this.tracker = null;
     this.mode = 'survey';
+    void this.startSurveyGps();
     // Issue #3: request orientation access at survey start (this is a
     // user gesture, satisfying the iOS requirement) so the
     // OrientationTracker — the single normalized orientation path — is
@@ -453,13 +438,7 @@ class App {
     this.survey = survey;
     this.selectedFieldCandidateId = null;
     this.selectedFieldPhotoId = null;
-    // The tracker is runtime state: a restored survey is never actively
-    // recording. Repair any stale persisted recording flag (issue #6).
-    this.tracker = null;
-    if (survey.recording) {
-      survey.recording = false;
-      void surveyDb.saveSurveyMeta(survey);
-    }
+    void this.startSurveyGps();
     // Issue #3: ensure the normalized orientation path is live when the
     // survey opens (user gesture; idempotent), so camera headings are
     // available from the very first capture.
@@ -485,7 +464,6 @@ class App {
     this.mapView.setTrack(s);
     this.mapView.setPhotos(s.photos);
     this.mapView.setCandidates(s.candidates);
-    this.updateRecBadge();
     requestAnimationFrame(() => {
       if (this.mode !== 'survey' || this.survey?.id !== s.id) return;
       this.mapView.map.resize();
@@ -505,15 +483,6 @@ class App {
       onchange: () => void this.onPhotoTaken(photoInput)
     });
     const note = el('input', { id: 'photo-note', class: 'note-input', placeholder: 'Note (e.g. bench)' });
-    const recBtn = el(
-      'button',
-      {
-        id: 'rec-btn',
-        class: 'btn' + (s.recording ? ' rec-on' : ''),
-        onclick: () => void this.toggleRecording()
-      },
-      s.recording ? '⏹ Stop' : '⏺ Record'
-    );
     const camBtn = el(
       'button',
       {
@@ -562,7 +531,6 @@ class App {
     );
 
     this.bottombar.replaceChildren(
-      recBtn,
       camBtn,
       ...(InAppCamera.available() ? [inappBtn] : []),
       note,
@@ -574,7 +542,6 @@ class App {
 
     // Issue #10: keep the GPS readiness indicator live on the field
     // screen, independent of Record mode.
-    this.startGpsStatus();
   }
 
   private selectFieldCandidate(id: string, scrollToCard = true): void {
@@ -675,44 +642,50 @@ class App {
     details.scrollTop = previousScroll;
   }
 
-  private async toggleRecording(): Promise<void> {
-    const s = this.survey;
-    if (!s) return;
-
-    if (this.tracker) {
-      this.stopRecordingNow();
-    } else {
-      const t = new GeolocationTracker(s.id, (sample) => {
-        s.gpsSamples.push(sample);
-        this.mapView.setTrack(s);
-      });
-      try {
-        await t.start();
-        this.tracker = t;
-        s.recording = true;
-        toast('Recording GPS track');
-      } catch {
-        this.tracker = null;
-        s.recording = false;
-        toast('Location permission denied — GPS tracking unavailable');
+  private async startSurveyGps(): Promise<void> {
+    const survey = this.survey;
+    if (!survey || this.tracker) return;
+    this.gpsState = 'acquiring';
+    survey.recording = false;
+    const tracker = new GeolocationTracker(survey.id, (sample) => {
+      if (this.tracker !== tracker || this.survey?.id !== survey.id) return;
+      this.survey.gpsSamples.push(sample);
+      if (!this.survey.recording) {
+        this.survey.recording = true;
+        void surveyDb.saveSurveyMeta(this.survey);
+      }
+      this.gpsState = 'active';
+      this.mapView.setTrack(this.survey);
+      this.refreshGpsStatus();
+    }, () => {
+      if (this.tracker !== tracker) return;
+      this.gpsState = 'unavailable';
+      if (this.survey) {
+        this.survey.recording = false;
+        void surveyDb.saveSurveyMeta(this.survey);
+      }
+      this.refreshGpsStatus();
+    });
+    this.tracker = tracker;
+    try {
+      await tracker.start();
+      if (this.tracker !== tracker || this.survey?.id !== survey.id) return;
+      this.survey.recording = true;
+      await surveyDb.saveSurveyMeta(this.survey);
+    } catch {
+      if (this.tracker !== tracker) return;
+      this.gpsState = 'unavailable';
+      if (this.survey) {
+        this.survey.recording = false;
+        void surveyDb.saveSurveyMeta(this.survey);
       }
     }
-
-    s.recording = this.tracker != null;
-    await surveyDb.saveSurveyMeta(s);
-    this.updateRecBadge();
-
-    const btn = this.bottombar.querySelector<HTMLButtonElement>('#rec-btn');
-    if (btn) {
-      btn.classList.toggle('rec-on', s.recording);
-      btn.textContent = t(s.recording ? '⏹ Stop' : '⏺ Record');
-    }
+    this.refreshGpsStatus();
   }
 
   private stopRecordingNow(): void {
     this.tracker?.stop();
     this.tracker = null;
-    this.updateRecBadge();
     if (this.survey) {
       this.survey.recording = false;
       void surveyDb.saveSurveyMeta(this.survey);
@@ -721,35 +694,17 @@ class App {
 
   /* ---------------- GPS readiness status (issue #10) ---------------- */
 
-  /** Keep the GPS readiness strip live on the survey screen, independent
-   *  of Record mode. Idempotent: safe to call on every render. */
+  /** Refresh the automatic survey GPS indicator without starting another watch. */
   private startGpsStatus(): void {
     this.gpsStatus.classList.remove('hidden');
     window.clearInterval(this.gpsTickTimer);
     this.gpsTickTimer = window.setInterval(() => this.refreshGpsStatus(), 1000);
-    // Poll a live fix only while the track recorder is inactive (it
-    // already streams samples then). Refresh every 5 s; each poll is a
-    // bounded one-shot request that resolves to null on denial/timeout.
-    window.clearInterval(this.gpsPollTimer);
-    const poll = (): void => {
-      if (this.tracker) return;
-      void requestOneShotFix(8000).then((fix) => {
-        if (fix && this.mode === 'survey') {
-          this.liveFix = fix;
-          this.refreshGpsStatus();
-        }
-      });
-    };
-    poll();
-    this.gpsPollTimer = window.setInterval(poll, 5000);
     this.refreshGpsStatus();
   }
 
   private stopGpsStatus(): void {
     window.clearInterval(this.gpsTickTimer);
     this.gpsTickTimer = undefined;
-    window.clearInterval(this.gpsPollTimer);
-    this.gpsPollTimer = undefined;
     this.gpsStatus.classList.add('hidden');
   }
 
@@ -762,16 +717,17 @@ class App {
     const fromTrack = this.tracker != null && last != null;
     const fix: OneShotFix | null = fromTrack
       ? { lat: last.lat, lon: last.lon, accuracy: last.accuracy, timestamp: last.timestamp }
-      : this.liveFix;
+      : null;
     const state = classifyGps(fix, now);
-    const photoPosition = [...s.photos].reverse().find((p) => p.cameraPosition)?.cameraPosition;
-    const photoNote = photoPosition
-      ? `Photo ${t(describeCameraPosition(photoPosition))}: ${photoPosition.lat.toFixed(5)}, ${photoPosition.lon.toFixed(5)}`
-      : '';
-    this.gpsStatus.textContent = t(!fix && photoNote
-      ? `Live GPS unavailable · ${photoNote}`
-      : t(formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live')) + (photoNote ? ` · ${t(photoNote)}` : ''));
-    this.gpsStatus.className = `gps-status gps-${!fix && photoNote ? 'photo' : state}`;
+    const label = this.gpsState === 'acquiring' ? 'GPS acquiring…'
+      : this.gpsState === 'unavailable' ? 'GPS unavailable'
+      : state === 'ready' ? 'GPS on' : state === 'coarse' ? 'GPS coarse' : 'GPS stale';
+    this.gpsStatus.textContent = t(label) + (fix && this.gpsState === 'active' && fix.accuracy != null
+      ? ` · ±${Math.round(fix.accuracy)} m` : '');
+    this.gpsStatus.title = this.gpsState === 'active'
+      ? t(formatGpsStatus(fix, now, s.gpsSamples.length, 'track'))
+      : `${t(label)} · ${t(`GPS track: ${s.gpsSamples.length} samples`)}`;
+    this.gpsStatus.className = `gps-status gps-${this.gpsState === 'active' ? state : this.gpsState}`;
   }
 
   private async onPhotoTaken(input: HTMLInputElement): Promise<void> {
@@ -875,7 +831,6 @@ class App {
     // screen. Photos taken here still land on the map via setPhotos.
     this.mapView.setTrack(s);
     this.mapView.setPhotos(s.photos);
-    this.updateRecBadge();
 
     const video = el('video', {
       id: 'inapp-video',
@@ -1106,10 +1061,12 @@ class App {
       result.candidates.push(...fresh.candidates.filter((c) => c.analyzer === 'manual'));
       await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
       fresh.candidates = result.candidates;
+      // Analysis may take minutes while new GPS samples keep arriving.
+      fresh.gpsSamples = s.gpsSamples;
       this.pinHistory.delete(fresh.id);
       this.survey = fresh;
       this.analysisResult = result;
-      this.stopRecordingNow();
+      fresh.recording = this.tracker?.isRecording ?? false;
 
       const failed = result.photoStatuses?.filter((st) => st.status === 'error') ?? [];
       if (failed.length > 0) {
