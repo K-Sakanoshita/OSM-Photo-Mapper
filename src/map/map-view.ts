@@ -1,6 +1,7 @@
 import maplibregl from 'maplibre-gl';
 import type { FeatureCandidate, GpsSample, Photo, Survey } from '../types';
 import { iconForTags, iconUrl } from './tag-icon';
+import { appAssetUrl, t } from '../i18n';
 
 /**
  * MapLibre GL view for the survey map.
@@ -33,7 +34,7 @@ export class MapView {
   ) {
     this.map = new maplibregl.Map({
       container,
-      style: new URL('./tiles/osmfj_poi.json', document.baseURI).href,
+      style: appAssetUrl('tiles/osmfj_poi.json'),
       center: [139.767, 35.681],
       zoom: 15
     });
@@ -149,7 +150,7 @@ export class MapView {
     }
     for (const [id, { match, merged }] of objects) {
         const content = document.createElement('div');
-        content.textContent = `${merged ? 'Merged · ' : ''}${id} · ${Object.entries(match.tags).map(([key, value]) => `${key}=${value}`).join(' ')}`;
+        content.textContent = `${merged ? t('Merged') + ' · ' : ''}${id} · ${Object.entries(match.tags).map(([key, value]) => `${key}=${value}`).join(' ')}`;
         const element = document.createElement('div');
         element.className = 'osm-icon-pin';
         const linkedIds = candidates.filter((candidate) => candidate.status === 'existing'

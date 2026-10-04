@@ -1,10 +1,13 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { cpSync } from 'node:fs';
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export default defineConfig({
   base: './',
+  build: {
+    rollupOptions: { input: { ja: resolve('index.html'), en: resolve('en/index.html') } }
+  },
   plugins: [
     {
       name: 'map-data-assets',
@@ -15,6 +18,7 @@ export default defineConfig({
       }
     },
     VitePWA({
+      injectRegister: false,
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
@@ -42,8 +46,10 @@ export default defineConfig({
         ]
       },
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,json,svg,woff2}'],
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, /\/en(?:\/|$)/],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.includes('/icon/'),
@@ -56,6 +62,14 @@ export default defineConfig({
           }
         ]
       }
-    })
+    }),
+    {
+      name: 'language-manifest-path',
+      writeBundle(options) {
+        const path = resolve(options.dir ?? 'dist', 'en/index.html');
+        const html = readFileSync(path, 'utf8');
+        writeFileSync(path, html.replace('href="./manifest.webmanifest"', 'href="../manifest.webmanifest"'));
+      }
+    }
   ]
 });

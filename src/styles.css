@@ -77,6 +77,8 @@ header.topbar h1 {
 }
 .icon-btn:active { background: rgba(255, 255, 255, 0.3); }
 .icon-btn.hidden { display: none; }
+.language-link { color: white; font-size: 13px; padding: 8px; white-space: nowrap; }
+.pin-undo[hidden] { display: none; }
 
 /* ---------- Map area ---------- */
 

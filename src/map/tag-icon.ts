@@ -1,4 +1,5 @@
 import rawMarker from '../../data/marker.jsonc?raw';
+import { appAssetUrl } from '../i18n';
 
 type Rules = Record<string, Record<string, string>>;
 const config = JSON.parse(rawMarker).marker as { tag: Rules; subtag: Record<string, Rules> };
@@ -20,5 +21,5 @@ export function iconForTags(tags: Record<string, string>): string {
 }
 
 export function iconUrl(filename: string): string {
-  return new URL(`icon/${filename}`, document.baseURI).href;
+  return appAssetUrl(`icon/${filename}`);
 }

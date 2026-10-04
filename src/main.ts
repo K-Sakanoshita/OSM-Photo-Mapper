@@ -1,5 +1,12 @@
 import './styles.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { appAssetUrl, language, t } from './i18n';
+
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register(appAssetUrl('sw.js'), { scope: appAssetUrl('') });
+  });
+}
 
 import { MapView } from './map/map-view';
 import { GeolocationTracker } from './capture/geolocation-tracker';
@@ -75,11 +82,15 @@ function el<K extends string>(tag: K, attrs: ElAttrs = {}, ...children: Array<No
     if (typeof v === 'function') {
       node.addEventListener(k.slice(2).toLowerCase(), v);
     } else {
-      node.setAttribute(k, v === true ? '' : String(v));
+      node.setAttribute(k, v === true ? '' : ['placeholder', 'title', 'aria-label', 'alt'].includes(k) ? t(String(v)) : String(v));
     }
   }
-  for (const c of children) node.append(typeof c === 'string' ? document.createTextNode(c) : c);
+  for (const c of children) appendLocalized(node, typeof c === 'string' ? document.createTextNode(t(c)) : c);
   return node;
+}
+
+function appendLocalized(parent: HTMLElement, ...children: Array<Node | string>): void {
+  parent.append(...children.map((child) => typeof child === 'string' ? t(child) : child));
 }
 
 function esc(s: string): string {
@@ -92,12 +103,12 @@ function esc(s: string): string {
 
 let toastTimer: number | undefined;
 function toast(msg: string): void {
-  const t = document.getElementById('toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add('show');
+  const node = document.getElementById('toast');
+  if (!node) return;
+  node.textContent = t(msg);
+  node.classList.add('show');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => t.classList.remove('show'), 2800);
+  toastTimer = window.setTimeout(() => node.classList.remove('show'), 2800);
 }
 
 function confSpan(kind: string, value: number): HTMLElement {
@@ -192,7 +203,8 @@ class App {
       onclick: () => void this.goBack()
     }, '←');
     this.title = el('h1', { id: 'title' }, 'OSM Photo Mapper');
-    const header = el('header', { class: 'topbar' }, this.backBtn, this.title);
+    const header = el('header', { class: 'topbar' }, this.backBtn, this.title,
+      el('a', { class: 'language-link', href: appAssetUrl(language === 'ja' ? 'en/' : ''), lang: language === 'ja' ? 'en' : 'ja' }, language === 'ja' ? 'English' : '日本語'));
 
     this.recBadge = el(
       'div',
@@ -209,7 +221,7 @@ class App {
     this.content = el('div', { id: 'content' });
     this.bottombar = el('div', { id: 'bottombar' });
 
-    app.append(header, mapWrap, this.content, this.bottombar, el('div', { id: 'toast' }));
+    appendLocalized(app, header, mapWrap, this.content, this.bottombar, el('div', { id: 'toast' }));
 
     this.mapView = new MapView(
       document.getElementById('map') as HTMLElement,
@@ -242,9 +254,9 @@ class App {
 
   private updateProxyStorageNote(): void {
     const note = this.content.querySelector<HTMLElement>('#proxy-storage-note');
-    if (note) note.textContent = this.proxySettingsAvailable
+    if (note) note.textContent = t(this.proxySettingsAvailable
       ? 'Proxy settings entered here are saved on this device. A saved token grants use of the proxy; do not use this on a shared device.'
-      : 'Device storage is unavailable. Proxy settings are held in memory and will be lost on reload.';
+      : 'Device storage is unavailable. Proxy settings are held in memory and will be lost on reload.');
   }
 
   private forgetProxySettings(endpointInput: HTMLInputElement, authInput: HTMLInputElement): void {
@@ -284,7 +296,7 @@ class App {
   private setMode(mode: Mode, title: string): void {
     this.mode = mode;
     document.body.dataset.mode = mode;
-    this.title.textContent = title;
+    this.title.textContent = t(title);
     this.backBtn.classList.toggle('hidden', mode === 'list');
     if (mode !== 'survey') {
       this.content.classList.remove('field-inspector', 'open');
@@ -458,7 +470,7 @@ class App {
 
   private async deleteSurvey(id: string, e: Event): Promise<void> {
     e.stopPropagation();
-    if (!window.confirm('Delete this survey and all of its data?')) return;
+    if (!window.confirm(t('Delete this survey and all of its data?'))) return;
     await surveyDb.deleteSurvey(id);
     this.renderSurveyList();
   }
@@ -636,12 +648,12 @@ class App {
     const details = el('div', { class: 'field-details' });
     if (candidate) {
       if (candidate.analyzer !== 'openai' && candidate.analyzer !== 'manual') {
-        details.append(el('div', { class: 'demo-banner' }, 'Saved analysis is unverified — re-analyze photos with OpenAI before exporting'));
+        appendLocalized(details, el('div', { class: 'demo-banner' }, 'Saved analysis is unverified — re-analyze photos with OpenAI before exporting'));
       }
-      details.append(this.buildCandidateCard(candidate, photoByObs, obsById));
+      appendLocalized(details, this.buildCandidateCard(candidate, photoByObs, obsById));
     } else if (photo) {
       const related = s.candidates.filter((c) => c.observationIds.some((id) => obsById.get(id)?.photoId === photo.id));
-      details.append(
+      appendLocalized(details,
         el('div', { class: 'candidate' },
           el('div', { class: 'head' }, el('strong', {}, 'Photo')),
           ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
@@ -693,7 +705,7 @@ class App {
     const btn = this.bottombar.querySelector<HTMLButtonElement>('#rec-btn');
     if (btn) {
       btn.classList.toggle('rec-on', s.recording);
-      btn.textContent = s.recording ? '⏹ Stop' : '⏺ Record';
+      btn.textContent = t(s.recording ? '⏹ Stop' : '⏺ Record');
     }
   }
 
@@ -756,9 +768,9 @@ class App {
     const photoNote = photoPosition
       ? `Photo ${describeCameraPosition(photoPosition)}: ${photoPosition.lat.toFixed(5)}, ${photoPosition.lon.toFixed(5)}`
       : '';
-    this.gpsStatus.textContent = !fix && photoNote
+    this.gpsStatus.textContent = t(!fix && photoNote
       ? `Live GPS unavailable · ${photoNote}`
-      : formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live') + (photoNote ? ` · ${photoNote}` : '');
+      : formatGpsStatus(fix, now, s.gpsSamples.length, fromTrack ? 'track' : 'live') + (photoNote ? ` · ${photoNote}` : ''));
     this.gpsStatus.className = `gps-status gps-${!fix && photoNote ? 'photo' : state}`;
   }
 
@@ -1543,42 +1555,42 @@ class App {
     );
     statusSel.value = c.status;
 
-    card.append(
+    appendLocalized(card,
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? (c.analyzer === 'manual' ? 'Custom tags' : c.featureType)), statusSel)
     );
-    card.append(el('button', { class: 'btn small', onclick: () => void this.onDeleteCandidate(c) }, 'Delete pin'));
-    card.append(el('div', { class: 'row' }, `Source: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'manual' ? 'Placed manually on map' : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
-    if (c.analyzer === 'manual') card.append(el('div', { class: 'row' }, 'No source photo — manually placed candidate'));
+    appendLocalized(card, el('button', { class: 'btn small', onclick: () => void this.onDeleteCandidate(c) }, 'Delete pin'));
+    appendLocalized(card, el('div', { class: 'row' }, `Source: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'manual' ? 'Placed manually on map' : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
+    if (c.analyzer === 'manual') appendLocalized(card, el('div', { class: 'row' }, 'No source photo — manually placed candidate'));
     if (c.analyzer === 'manual') {
       const classSelect = el('select', { 'aria-label': 'Feature type', onchange: () => void this.onManualClassChanged(c, classSelect) },
         el('option', { value: 'manual' }, 'Custom tags'),
         ...FEATURE_CLASSES.map((cls) => el('option', { value: cls.id }, cls.label))
       );
       classSelect.value = c.featureType;
-      card.append(el('div', { class: 'row' }, 'Feature type: ', classSelect));
+      appendLocalized(card, el('div', { class: 'row' }, 'Feature type: ', classSelect));
     }
-    if (c.analyzer !== 'manual') card.append(el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
+    if (c.analyzer !== 'manual') appendLocalized(card, el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
     for (const obs of evidence) {
       const sourceImage = photoByObs.get(obs.id)?.image;
       if (sourceImage) {
         const box = obs.bbox;
-        card.append(el('div', { class: 'evidence-photo' },
+        appendLocalized(card, el('div', { class: 'evidence-photo' },
           el('img', { src: sourceImage, alt: `Source photo with ${obs.featureType} detection box` }),
           el('div', { class: 'evidence-box', style: `left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%` })
         ));
       }
-      card.append(el('div', { class: 'row' },
+      appendLocalized(card, el('div', { class: 'row' },
         `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
         `Distance: ${obs.distanceEstimate == null ? 'unknown' : `${obs.distanceEstimate.toFixed(0)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(0)} m`}`} · `,
         `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : 'none'}`
       ));
-      card.append(el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
+      appendLocalized(card, el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
     }
 
     // Issue #9: review-only class — the OSM mapping is uncertain/ambiguous,
     // so nothing is applied automatically; the reviewer decides.
     if (cls && !cls.autoTag) {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'review-only-note' },
@@ -1594,7 +1606,7 @@ class App {
     // blocks are shown further down as the geometry note.)
     const exportCheck = validateCandidateExport(c);
     if (c.status === 'new' && !exportCheck.exportable && exportCheck.gate === 'semantics') {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'needs-tag-review', title: 'Semantic export gate (issue #11)' },
@@ -1605,7 +1617,7 @@ class App {
 
     const posRow = el('div', { class: 'row' });
     if (c.lat != null && c.lon != null) {
-      posRow.append(
+      appendLocalized(posRow,
         el('b', {}, 'Position'),
         ` ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}  `,
         confSpan('pos', c.positionConfidence),
@@ -1627,11 +1639,11 @@ class App {
     } else {
       const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps)
         || (evidence.length === 0 && this.survey?.photos.length === 1 && !!this.survey.photos[0].gps);
-      posRow.append(el('b', {}, 'Position'), hasCameraGps
+      appendLocalized(posRow, el('b', {}, 'Position'), hasCameraGps
         ? ' unknown — camera GPS locates the photo, not the photographed object. '
         : ' unknown — no usable camera GPS was read from the photo. ');
     }
-    if (this.mode === 'review') posRow.append(el('button', { class: 'btn small', onclick: () => {
+    if (this.mode === 'review') appendLocalized(posRow, el('button', { class: 'btn small', onclick: () => {
       this.placingCandidate = false;
       this.placingExistingCandidateId = this.placingExistingCandidateId === c.id ? null : c.id;
       if (c.lat == null || c.lon == null) {
@@ -1640,8 +1652,8 @@ class App {
       }
       void this.renderReviewScreen(true);
     } }, this.placingExistingCandidateId === c.id ? 'Cancel placement' : c.lat == null ? 'Place pin on map' : 'Move pin on map'));
-    card.append(posRow);
-    card.append(el('div', { class: 'row' }, `OSM mapping: ${Object.entries(c.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'unresolved'}`));
+    appendLocalized(card, posRow);
+    appendLocalized(card, el('div', { class: 'row' }, `OSM mapping: ${Object.entries(c.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'unresolved'}`));
 
     // Issue #10: the camera position and its provenance must be visible to
     // the reviewer — it is evidence for the object's location, and a
@@ -1650,7 +1662,7 @@ class App {
       .map((id) => photoByObs.get(id)?.cameraPosition)
       .find((v) => v != null)
       ?? (evidence.length === 0 && this.survey?.photos.length === 1 ? this.survey.photos[0].cameraPosition : undefined);
-    if (c.analyzer !== 'manual') card.append(
+    if (c.analyzer !== 'manual') appendLocalized(card,
       el(
         'div',
         { class: 'row cam-row' },
@@ -1681,13 +1693,13 @@ class App {
         }
       });
       fileInput.style.display = 'none';
-      card.append(el('div', { class: 'row' },
+      appendLocalized(card, el('div', { class: 'row' },
         el('button', { class: 'btn small', onclick: () => fileInput.click() }, 'Read GPS from original photo'),
         fileInput
       ));
     }
     if (c.analyzer !== 'manual' && evidence.length === 0 && this.survey?.photos.length === 1) {
-      card.append(el('div', { class: 'row' }, 'Saved detection details are unavailable. Re-run photo analysis to estimate the object position, or place its pin on the map.'));
+      appendLocalized(card, el('div', { class: 'row' }, 'Saved detection details are unavailable. Re-run photo analysis to estimate the object position, or place its pin on the map.'));
     }
 
     // Issue #3: camera-bearing evidence. Show the bearing WITH its
@@ -1701,7 +1713,7 @@ class App {
       .find((p) => p != null && (p.cameraHeading != null || p.headingNote != null));
     if (hdgPhoto?.cameraHeading) {
       const ch = hdgPhoto.cameraHeading;
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'row heading-row' },
@@ -1710,7 +1722,7 @@ class App {
         )
       );
     } else if (hdgPhoto?.headingNote) {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'row heading-row heading-missing' },
@@ -1720,7 +1732,7 @@ class App {
       );
     }
     if (hdgPhoto?.movementHeading != null) {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'row heading-row movement-row' },
@@ -1744,7 +1756,7 @@ class App {
       }
       const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
       for (const e of ps.evidence) {
-        solRow.append(el('span', { class: 'ev-chip', title: e.detail ?? e.label }, e.label));
+        appendLocalized(solRow, el('span', { class: 'ev-chip', title: e.detail ?? e.label }, e.label));
       }
       // Issue #8: the aerial refinement is a reviewable, reversible
       // proposal — show which position is working, the imagery
@@ -1753,18 +1765,18 @@ class App {
       // Issue #9: review-only classes are never auto-snapped — unconfirmed
       // OSM semantics must not drive object identity.
       if (!snapped && cls && !cls.autoTag) {
-        solRow.append(el('span', { class: 'review-only-note' }, ' · no auto-snap (review-only class)'));
+        appendLocalized(solRow, el('span', { class: 'review-only-note' }, ' · no auto-snap (review-only class)'));
       }
       // Attribution is shown whenever imagery contributed — including as
       // the base position a snap was evaluated from.
       if (ps.refinedPosition && ps.imagerySource) {
-        solRow.append(
+        appendLocalized(solRow,
           el('span', { class: 'imagery-attr', title: 'Imagery source used for position refinement' }, ` · Imagery: ${ps.imagerySource}`)
         );
       }
       if (ps.refinedPosition && !snapped) {
         if (ps.refinementApplied !== false) {
-          solRow.append(
+          appendLocalized(solRow,
             el('span', { class: 'working-tag' }, ' · working: refined'),
             el('button', {
               class: 'btn small revert-btn',
@@ -1773,7 +1785,7 @@ class App {
             }, '↩ Revert to ground estimate')
           );
         } else {
-          solRow.append(
+          appendLocalized(solRow,
             el('span', { class: 'working-tag' }, ' · working: ground estimate'),
             el('button', {
               class: 'btn small apply-btn',
@@ -1783,10 +1795,10 @@ class App {
           );
         }
       }
-      card.append(solRow);
+      appendLocalized(card, solRow);
     }
 
-    card.append(
+    appendLocalized(card,
       el(
         'div',
         { class: 'tags' },
@@ -1815,7 +1827,7 @@ class App {
       for (const attrs of detected) {
         for (const [k, v] of Object.entries(attrs)) (merged[k] ??= []).push(v);
       }
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'detected-attrs', title: 'Detected but unconfirmed — NOT applied as OSM tags (issue #2)' },
@@ -1839,16 +1851,16 @@ class App {
         radio.onchange = () => {
           if (radio.checked) void this.onMappingChosen(c, m);
         };
-        picker.append(el('label', { class: 'mapping-opt' }, radio, ` ${m.label}${m.hint ? ` — ${m.hint}` : ''}`));
+        appendLocalized(picker, el('label', { class: 'mapping-opt' }, radio, ` ${m.label}${m.hint ? ` — ${m.hint}` : ''}`));
       }
-      card.append(picker);
+      appendLocalized(card, picker);
     }
 
     // Issue #9: geometry policy — area-based classes are never created from
     // a single photo; show the reviewer the alternatives.
     const geomPref = geometryPreferenceFor(c.featureType);
     if (c.status === 'new' && (geomPref === 'area' || geomPref === 'existing-only')) {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'geometry-note' },
@@ -1863,7 +1875,7 @@ class App {
       ([k, v]) => c.tags[k] !== v
     );
     if (pending.length > 0) {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'suggest-row' },
@@ -1891,7 +1903,7 @@ class App {
         sel.onchange = () => void this.onCommonValueChanged(c, k, sel);
         return sel;
       });
-      card.append(el('div', { class: 'suggest-row' }, 'Set value (only if visible in photo):', ...picks));
+      appendLocalized(card, el('div', { class: 'suggest-row' }, 'Set value (only if visible in photo):', ...picks));
     }
 
     const nameInput = el('input', {
@@ -1900,14 +1912,14 @@ class App {
       value: c.name ?? '',
       onchange: () => void this.onNameChanged(c, nameInput)
     });
-    card.append(el('div', { class: 'name-row' }, nameInput));
+    appendLocalized(card, el('div', { class: 'name-row' }, nameInput));
 
     if (c.warnings.length > 0) {
-      card.append(el('div', { class: 'warnings' }, el('ul', {}, ...c.warnings.map((w) => el('li', {}, w)))));
+      appendLocalized(card, el('div', { class: 'warnings' }, el('ul', {}, ...c.warnings.map((w) => el('li', {}, w)))));
     }
 
     if (c.osmMatches.length > 0) {
-      card.append(
+      appendLocalized(card,
         el(
           'div',
           { class: 'osm-matches' },
@@ -2010,7 +2022,7 @@ class App {
   }
 
   private async onEditTag(c: FeatureCandidate, key: string): Promise<void> {
-    const v = window.prompt(`Edit value for "${key}=" (leave empty to remove):`, c.tags[key] ?? '');
+    const v = window.prompt(t(`Edit value for "${key}=" (leave empty to remove):`), c.tags[key] ?? '');
     if (v == null) return;
     const val = v.trim();
     if (val) c.tags[key] = val;
@@ -2213,7 +2225,7 @@ class App {
     const history = this.survey ? this.pinHistory.get(this.survey.id) : undefined;
     this.undoButton.hidden = this.mode !== 'review' && this.mode !== 'survey';
     this.undoButton.disabled = this.undoBusy || !history?.length;
-    this.undoButton.textContent = history?.[history.length - 1]?.label ?? 'Undo';
+    this.undoButton.textContent = t(history?.[history.length - 1]?.label ?? 'Undo');
   }
 
   private async undoPinEdit(): Promise<void> {
@@ -2496,7 +2508,7 @@ class App {
     const blob = new Blob([xml], { type: 'application/xml' });
     const url = URL.createObjectURL(blob);
     const a = el('a', { href: url, download: `${slug || 'survey'}.osmchange`, style: 'display:none' });
-    this.content.append(a);
+    appendLocalized(this.content, a);
     a.click();
     window.setTimeout(() => {
       URL.revokeObjectURL(url);
