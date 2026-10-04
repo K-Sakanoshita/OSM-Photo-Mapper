@@ -272,15 +272,17 @@ export class OrientationTracker {
             : 0;
         // Issue #3: every reading is timestamped so the capture pipeline
         // can check freshness relative to the shutter.
-        this.latest = {
-          ...normalizeHeading(e as unknown as OrientationLike, screenAngle),
-          timestamp: Date.now()
-        };
+        const normalized = normalizeHeading(e as unknown as OrientationLike, screenAngle);
+        // Relative events can arrive after absolute events. Keep the last
+        // geographic reading, including its original freshness timestamp.
+        if (normalized.heading == null && this.latest.heading != null) return;
+        this.latest = { ...normalized, timestamp: Date.now() };
       };
       window.addEventListener('deviceorientation', this.listener);
+      window.addEventListener('deviceorientationabsolute', this.listener);
     };
 
-    const DOE = DeviceOrientationEvent as unknown as {
+    const DOE = (typeof DeviceOrientationEvent === 'undefined' ? undefined : DeviceOrientationEvent) as unknown as {
       requestPermission?: () => Promise<string>;
     } | undefined;
     if (typeof DOE?.requestPermission === 'function') {
@@ -298,7 +300,7 @@ export class OrientationTracker {
           this.latest = { quality: 'none', detail: 'Orientation permission failed' };
         }
       );
-    } else if (typeof window !== 'undefined' && 'ondeviceorientation' in window) {
+    } else if (typeof window !== 'undefined' && ('ondeviceorientation' in window || 'ondeviceorientationabsolute' in window)) {
       attach();
     } else {
       this.latest = { quality: 'none', detail: 'No orientation sensor exposed' };
@@ -316,8 +318,10 @@ export class OrientationTracker {
   stop(): void {
     if (this.listener && typeof window !== 'undefined') {
       window.removeEventListener('deviceorientation', this.listener);
+      window.removeEventListener('deviceorientationabsolute', this.listener);
     }
     this.listener = null;
     this.started = false;
+    this.latest = { quality: 'none', detail: 'Not started' };
   }
 }

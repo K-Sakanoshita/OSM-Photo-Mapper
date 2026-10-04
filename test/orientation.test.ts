@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   HEADING_UNCERTAINTY_DEG,
   associateCameraHeading,
   headingUncertaintyDeg,
   normalizeHeading,
   ORIENT_FRESH_MS,
+  OrientationTracker,
   type HeadingReading,
   type OrientationLike
 } from '../src/capture/orientation';
@@ -297,5 +298,51 @@ describe('sideways photography: movement heading must never become the camera be
     const { cameraHeading, headingNote } = associateCameraHeading(null, Date.now());
     expect(cameraHeading).toBeUndefined();
     expect(headingNote).toBe('No orientation reading');
+  });
+});
+
+
+describe('OrientationTracker absolute events', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  function setup() {
+    const host = Object.assign(new EventTarget(), { ondeviceorientationabsolute: null });
+    vi.stubGlobal('window', host);
+    vi.stubGlobal('DeviceOrientationEvent', undefined);
+    vi.stubGlobal('screen', { orientation: { angle: 0 } });
+    const tracker = new OrientationTracker();
+    tracker.start();
+    const emit = (type: string, absolute: boolean, alpha: number) => {
+      host.dispatchEvent(Object.assign(new Event(type), { absolute, alpha, beta: 90, gamma: 0 }));
+    };
+    return { tracker, emit };
+  }
+
+  it('records absolute heading and does not replace it with relative orientation', () => {
+    const { tracker, emit } = setup();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    emit('deviceorientationabsolute', true, 90);
+    expect(tracker.read().heading).toBe(270);
+    clock.mockReturnValue(2000);
+    emit('deviceorientation', false, 20);
+    expect(tracker.read().heading).toBe(270);
+    expect(tracker.read().timestamp).toBe(1000);
+    expect(associateCameraHeading(tracker.read(), 1001).cameraHeading?.bearing).toBe(270);
+    expect(associateCameraHeading(tracker.read(), 12000).cameraHeading).toBeUndefined();
+    tracker.stop();
+    emit('deviceorientationabsolute', true, 0);
+    expect(tracker.read().heading).toBeUndefined();
+    tracker.start();
+    emit('deviceorientationabsolute', true, 180);
+    expect(tracker.read().heading).toBe(180);
+    tracker.stop();
+  });
+
+  it('keeps relative-only events without inventing a geographic heading', () => {
+    const { tracker, emit } = setup();
+    emit('deviceorientation', false, 90);
+    expect(tracker.read().quality).toBe('relative');
+    expect(associateCameraHeading(tracker.read(), Date.now()).cameraHeading).toBeUndefined();
+    tracker.stop();
   });
 });
