@@ -290,7 +290,9 @@
     "Choose value / enter manually": "valueを選択／手入力",
     "Save tag": "タグを保存",
     "Select the original photo from Files to preserve EXIF GPS": "EXIFのGPS情報を保持するため、「ファイル」から元写真を選択してください",
-    "Select an image file": "画像ファイルを選択してください"
+    "Select an image file": "画像ファイルを選択してください",
+    "Photo has no GPS. Select the original file from Files, or place its pin manually.": "写真にGPSがありません。「ファイル」から元写真を選択するか、地図上にピンを配置してください。",
+    "No camera heading": "カメラの方位なし"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",
@@ -364,6 +366,7 @@
     "{source} @ {coordinates}": "{source} @ {coordinates}",
     "Remove {key}": "{key}を削除",
     "GPS track: {count} samples": "GPS軌跡：{count}件",
-    "Image direction: {angle}° from center (right + / left −; assumed field of view)": "写真内の方向：中央から{angle}°（右＋／左−・画角を仮定した概算）"
+    "Image direction: {angle}° from center (right + / left −; assumed field of view)": "写真内の方向：中央から{angle}°（右＋／左−・画角を仮定した概算）",
+    "Photo captured ({count})": "写真を取り込みました（{count}枚）"
   }
 }

@@ -772,6 +772,7 @@ class App {
       this.pickerLaunchTs = undefined;
       s.photos.push(photo);
       this.mapView.setPhotos(s.photos);
+      if (this.mode === 'survey' && this.survey?.id === s.id) await this.renderFieldInspector();
       if (photo.gps) this.mapView.map.jumpTo({ center: [photo.gps.lon, photo.gps.lat], zoom: 18 });
       this.refreshGpsStatus();
       if (noteEl) noteEl.value = '';
@@ -794,15 +795,15 @@ class App {
       photo.timestampSource && photo.timestampSource !== 'exif' ? ` [${photo.timestampSource} time]` : '';
     const camNote = photo.cameraPosition
       ? ` · cam: ${t(describeCameraPosition(photo.cameraPosition))} ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
-      : ' · no GPS — needs manual positioning';
+      : ` · ${t('Photo has no GPS. Select the original file from Files, or place its pin manually.')}`;
     let hdgNote = '';
     if (photo.cameraHeading) {
       const ch = photo.cameraHeading;
-      hdgNote = ` · cam hdg ${ch.bearing.toFixed(0)}° (${ch.source}, ±${ch.uncertaintyDeg}°, age ${Math.round(ch.ageMs / 1000)} s)`;
+      hdgNote = ` · ${t('Cam heading')} ${ch.bearing.toFixed(0)}° (${t(ch.source)}, ±${ch.uncertaintyDeg}°, ${t(`age ${Math.round(ch.ageMs / 1000)} s`)})`;
     } else {
-      hdgNote = ` · no camera heading${photo.headingNote ? `: ${photo.headingNote}` : ''}`;
+      hdgNote = ` · ${t('No camera heading')}${photo.headingNote ? `: ${t(photo.headingNote)}` : ''}`;
     }
-    return `Photo captured (${count})${srcNote}${camNote}${hdgNote}`;
+    return `${t(`Photo captured (${count})`)}${srcNote}${camNote}${hdgNote}`;
   }
 
   /* ---------------- in-app camera (issue #13, phase 2) ---------------- */
