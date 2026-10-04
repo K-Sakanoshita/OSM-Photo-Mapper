@@ -1933,7 +1933,7 @@ class App {
         el(
           'div',
           { class: 'osm-matches' },
-          'Nearby in OSM:',
+          'Nearby in OSM (distance from current pin; score is not identity confidence):',
           ...c.osmMatches.map((m) => this.buildOsmMatchRow(c, m))
         )
       );
@@ -1986,6 +1986,9 @@ class App {
 
   private buildOsmMatchRow(c: FeatureCandidate, m: OsmMatch): HTMLElement {
     const linked = c.linkedOsmId === m.osmId && (c.linkedOsmType == null || c.linkedOsmType === m.osmType);
+    const distance = c.lat != null && c.lon != null
+      ? `${Math.round(distanceMeters(c.lat, c.lon, m.lat, m.lon))} m from pin`
+      : 'Distance unavailable';
     const tagPreview = Object.entries(m.tags)
       .slice(0, 2)
       .map(([k, v]) => `${k}=${v}`)
@@ -1993,7 +1996,7 @@ class App {
     return el(
       'div',
       { class: 'osm-match' + (linked ? ' linked' : '') },
-      el('div', { class: 'm-meta' }, `${m.osmType}/${m.osmId} · ${Math.round(m.matchScore * 100)}% · ${tagPreview}`),
+      el('div', { class: 'm-meta' }, `${m.osmType}/${m.osmId} · ${distance} · Score ${Math.round(m.matchScore * 100)}% · ${tagPreview}`),
       el(
         'button',
         {
