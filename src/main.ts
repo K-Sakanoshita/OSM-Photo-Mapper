@@ -1524,6 +1524,62 @@ class App {
     );
   }
 
+  private buildCandidateGeometryDetails(c: FeatureCandidate, evidence: Observation[], photoByObs: Map<string, Photo | undefined>): HTMLElement {
+    const details = el('section', { class: 'candidate-geometry-details' }, el('h3', {}, getFeatureClass(c.featureType)?.label ?? c.featureType));
+    for (const obs of evidence) {
+      const photo = photoByObs.get(obs.id);
+      const heading = photo?.cameraHeading;
+      const ray = photo ? rayFromPhoto(photo, obs) : null;
+      const offset = imageBearing(0, obs.bbox);
+      const signedOffset = offset > 180 ? offset - 360 : offset;
+      appendLocalized(details, el('div', { class: 'row' },
+        el('b', {}, 'Estimated distance'),
+        ` ${obs.distanceEstimate == null ? t('unknown') : `${obs.distanceEstimate.toFixed(1)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(1)} m`}`}`,
+        el('span', { class: 'hint' }, ' (AI estimate from photo)')
+      ));
+      appendLocalized(details, el('div', { class: 'row' },
+        el('b', {}, 'Estimated object bearing'),
+        heading
+          ? ` ${imageBearing(heading.bearing, obs.bbox).toFixed(0)}°${ray?.bearingUncDeg == null ? '' : ` ±${ray.bearingUncDeg.toFixed(0)}°`} · ${t(heading.source)}`
+          : ' unavailable — no camera heading',
+        el('span', { class: 'hint' }, ' (north 0°, east 90°)')
+      ));
+      appendLocalized(details, el('div', { class: 'row hint' },
+        `Image direction: ${signedOffset >= 0 ? '+' : ''}${signedOffset.toFixed(0)}° from center (right + / left −; assumed field of view)`
+      ));
+    }
+    const posRow = el('div', { class: 'row' });
+    if (c.lat != null && c.lon != null) {
+      appendLocalized(posRow,
+        el('b', {}, 'Position'),
+        ` ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}  `,
+        confSpan('pos', c.positionConfidence),
+        // Issue #3: the quality classification must be visible to the
+        // reviewer — it distinguishes a strong triangulation from a
+        // single-ray projection, weak geometry, or contradictory rays.
+        c.positionQuality
+          ? el(
+              'span',
+              { class: `quality-chip q-${c.positionQuality}`, title: 'Position quality (issue #3)' },
+              ` ${POSITION_QUALITY_LABEL[c.positionQuality]}`
+            )
+          : '',
+        c.positionUncertaintyMeters != null
+          ? ` · σ ${c.positionUncertaintyMeters.toFixed(0)} m`
+          : '',
+        ' '
+      );
+    } else {
+      const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps)
+        || (evidence.length === 0 && this.survey?.photos.length === 1 && !!this.survey.photos[0].gps);
+      appendLocalized(posRow, el('b', {}, 'Position'), hasCameraGps
+        ? ' unknown — camera GPS locates the photo, not the photographed object. '
+        : ' unknown — no usable camera GPS was read from the photo. ');
+    }
+    appendLocalized(details, posRow);
+    return details;
+  }
+
   private photoDetailsButton(photo: Photo, compact = false): HTMLButtonElement {
     return el('button', {
       class: 'photo-details-button',
@@ -1533,7 +1589,7 @@ class App {
     }, compact ? 'ⓘ' : 'Details');
   }
 
-  private showPhotoDetails(photo: Photo): void {
+  private async showPhotoDetails(photo: Photo): Promise<void> {
     const dialog = el('dialog', { class: 'photo-details-dialog', 'aria-label': 'Photo details' }) as HTMLDialogElement;
     const close = el('button', { class: 'btn', onclick: () => dialog.close() }, 'Close');
     const heading = photo.cameraHeading;
@@ -1551,6 +1607,14 @@ class App {
       el('div', { class: 'row' }, `${t('Note')}: ${photo.note || t('none')}`),
       this.buildPhotoImportInfo(photo)
     );
+    const survey = this.survey;
+    if (survey) {
+      const observations = await surveyDb.listObservations(survey.id);
+      const photoByObs = this.photosForObservations(survey, observations);
+      for (const candidate of survey.candidates.filter((c) => c.observationIds.some((id) => photoByObs.get(id)?.id === photo.id))) {
+        appendLocalized(dialog, this.buildCandidateGeometryDetails(candidate, observations.filter((obs) => candidate.observationIds.includes(obs.id) && obs.photoId === photo.id), photoByObs));
+      }
+    }
     dialog.addEventListener('close', () => dialog.remove(), { once: true });
     document.body.append(dialog);
     dialog.showModal();
@@ -1616,6 +1680,18 @@ class App {
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? (c.analyzer === 'manual' ? 'Custom tags' : c.featureType)), statusSel)
     );
     appendLocalized(card, el('button', { class: 'btn small', onclick: () => void this.onDeleteCandidate(c) }, 'Delete pin'));
+    appendLocalized(card, el('button', { class: 'btn small', onclick: () => {
+      const photo = evidence.map((obs) => photoByObs.get(obs.id)).find((p) => p != null);
+      if (photo) { void this.showPhotoDetails(photo); return; }
+      const dialog = el('dialog', { class: 'photo-details-dialog', 'aria-label': 'Details' }) as HTMLDialogElement;
+      appendLocalized(dialog, el('div', { class: 'photo-details-header' }, el('h2', {}, 'Details'),
+        el('button', { class: 'btn', onclick: () => dialog.close() }, 'Close')),
+        this.buildCandidateGeometryDetails(c, evidence, photoByObs));
+      dialog.addEventListener('close', () => dialog.remove(), { once: true });
+      document.body.append(dialog);
+      dialog.showModal();
+    } }, 'Details'));
+
     appendLocalized(card, el('div', { class: 'row' }, `Source: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'manual' ? 'Placed manually on map' : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
     if (c.analyzer === 'manual') appendLocalized(card, el('div', { class: 'row' }, 'No source photo — manually placed candidate'));
     if (c.analyzer === 'manual') {
@@ -1650,26 +1726,6 @@ class App {
         `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
         `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : t('none')}`
       ));
-      const photo = photoByObs.get(obs.id);
-      const heading = photo?.cameraHeading;
-      const ray = photo ? rayFromPhoto(photo, obs) : null;
-      const offset = imageBearing(0, obs.bbox);
-      const signedOffset = offset > 180 ? offset - 360 : offset;
-      appendLocalized(card, el('div', { class: 'row' },
-        el('b', {}, 'Estimated distance'),
-        ` ${obs.distanceEstimate == null ? t('unknown') : `${obs.distanceEstimate.toFixed(1)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(1)} m`}`}`,
-        el('span', { class: 'hint' }, ' (AI estimate from photo)')
-      ));
-      appendLocalized(card, el('div', { class: 'row' },
-        el('b', {}, 'Estimated object bearing'),
-        heading
-          ? ` ${imageBearing(heading.bearing, obs.bbox).toFixed(0)}°${ray?.bearingUncDeg == null ? '' : ` ±${ray.bearingUncDeg.toFixed(0)}°`} · ${t(heading.source)}`
-          : ' unavailable — no camera heading',
-        el('span', { class: 'hint' }, ' (north 0°, east 90°)')
-      ));
-      appendLocalized(card, el('div', { class: 'row hint' },
-        `Image direction: ${signedOffset >= 0 ? '+' : ''}${signedOffset.toFixed(0)}° from center (right + / left −; assumed field of view)`
-      ));
       appendLocalized(card, el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
     }
 
@@ -1702,33 +1758,6 @@ class App {
     }
 
     const posRow = el('div', { class: 'row' });
-    if (c.lat != null && c.lon != null) {
-      appendLocalized(posRow,
-        el('b', {}, 'Position'),
-        ` ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}  `,
-        confSpan('pos', c.positionConfidence),
-        // Issue #3: the quality classification must be visible to the
-        // reviewer — it distinguishes a strong triangulation from a
-        // single-ray projection, weak geometry, or contradictory rays.
-        c.positionQuality
-          ? el(
-              'span',
-              { class: `quality-chip q-${c.positionQuality}`, title: 'Position quality (issue #3)' },
-              ` ${POSITION_QUALITY_LABEL[c.positionQuality]}`
-            )
-          : '',
-        c.positionUncertaintyMeters != null
-          ? ` · σ ${c.positionUncertaintyMeters.toFixed(0)} m`
-          : '',
-        ' '
-      );
-    } else {
-      const hasCameraGps = c.observationIds.some((id) => photoByObs.get(id)?.gps)
-        || (evidence.length === 0 && this.survey?.photos.length === 1 && !!this.survey.photos[0].gps);
-      appendLocalized(posRow, el('b', {}, 'Position'), hasCameraGps
-        ? ' unknown — camera GPS locates the photo, not the photographed object. '
-        : ' unknown — no usable camera GPS was read from the photo. ');
-    }
     if (this.mode === 'review') appendLocalized(posRow, el('button', { class: 'btn small', onclick: () => {
       this.placingCandidate = false;
       this.placingExistingCandidateId = this.placingExistingCandidateId === c.id ? null : c.id;
