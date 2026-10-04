@@ -14,6 +14,7 @@ import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
 import { capturePhoto, restorePhotoGps } from './capture/photo';
+import { pickPhotoFile } from './capture/photo-picker';
 import { InAppCamera } from './capture/inapp-camera';
 import {
   requestOneShotFix,
@@ -491,10 +492,9 @@ class App {
         class: 'btn accent',
         title: 'Select the original photo from Files to preserve EXIF GPS',
         onclick: () => {
-          // Issue #10: start the one-shot GPS fix and open the camera/file
-          // input IN THE SAME user gesture. Awaiting the fix first would
-          // lose the transient user activation and the camera would not
-          // open. The fix is awaited (bounded) in onPhotoTaken instead.
+          const selection = pickPhotoFile(() => photoInput.click());
+          // Start the GPS fix in the same gesture, after opening the picker.
+          // Never await GPS before requesting file access.
           this.pendingFix = requestOneShotFix(15_000);
           // Issue #3: the orientation permission (iOS) also requires a user
           // gesture, so start the tracker in this same gesture.
@@ -504,7 +504,17 @@ class App {
           // could possibly have composed the shot. Orientation readings
           // taken before this are pre-camera evidence, never bearing.
           this.pickerLaunchTs = Date.now();
-          photoInput.click();
+          void selection.then((file) => {
+            if (file && this.survey?.id === s.id && this.mode !== 'list') return this.onPhotoFile(file);
+            if (file === null) {
+              this.pendingFix = null;
+              this.pickerLaunchTs = undefined;
+            }
+          }).catch((error) => {
+            this.pendingFix = null;
+            this.pickerLaunchTs = undefined;
+            toast(`Photo failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
         }
       },
       '📷 Photo'
@@ -734,10 +744,14 @@ class App {
   }
 
   private async onPhotoTaken(input: HTMLInputElement): Promise<void> {
-    const s = this.survey;
     const file = input.files?.[0];
-    if (!s || !file) return;
     input.value = '';
+    if (file) await this.onPhotoFile(file);
+  }
+
+  private async onPhotoFile(file: File): Promise<void> {
+    const s = this.survey;
+    if (!s) return;
     if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?)$/i.test(file.name)) {
       toast('Select an image file');
       return;
@@ -1678,7 +1692,11 @@ class App {
       });
       fileInput.style.display = 'none';
       appendLocalized(card, el('div', { class: 'row' },
-        el('button', { class: 'btn small', onclick: () => fileInput.click() }, 'Read GPS from original photo'),
+        el('button', { class: 'btn small', onclick: () => {
+          void pickPhotoFile(() => fileInput.click()).then((file) => {
+            if (file) return this.onRestorePhotoGps(photo, file);
+          }).catch((error) => toast(error instanceof Error ? error.message : String(error)));
+        } }, 'Read GPS from original photo'),
         fileInput
       ));
     }
