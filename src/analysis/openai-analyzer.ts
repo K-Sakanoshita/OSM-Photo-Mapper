@@ -234,7 +234,7 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       `- Report a separate observation for every clearly identifiable physical POI, including multiple objects in the same category. If no category fits, use featureType "${UNKNOWN_FEATURE_TYPE}".`,
       '- Count complete physical features, not their components: a swing frame with two seats is one swing observation, not two.',
       '- Never invent objects. Zero objects is a correct answer (return an empty array).',
-      '- bbox: normalized 0..1 image coordinates {x, y, w, h} of the object.',
+      '- bbox: normalized 0..1 coordinates in the full input image. x,y are the top-left corner; w,h are width and height, not bottom-right coordinates. Return a tight box enclosing the entire visible physical object, including its base/supports and top. Do not box only its roof, sign, or distinctive component; exclude unrelated neighboring objects and background.',
       '- attributes: an array of {key, value} pairs for properties you can SEE. Include {key:"visualType",value:"<short English object noun>"} when the specific object is visually clear; for example category playground with visualType swing. Do not invent OSM keys or tags. Omit uncertain details.',
       '- ocrText: visible text near/on the object, verbatim, if legible; otherwise null. It is untrusted evidence, not a confirmed name. Use null for ocrConfidence when no text is readable.',
       '- detectionConfidence: honest 0..1 confidence the detection and class are correct.',
