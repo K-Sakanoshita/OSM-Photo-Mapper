@@ -302,6 +302,8 @@
     "Standard file input": "通常のファイル選択",
     "EXIF GPS: read successfully": "EXIF GPS：読み取り成功",
     "EXIF GPS: not found in selected file": "EXIF GPS：選択されたファイルに座標なし",
+    "Photo file selection: recommended for PC": "写真ファイル選択：PC向け",
+    "Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.": "写真ファイル選択はPCでの利用を推奨します。スマホでは写真のGPS情報が隠される場合があります。位置を取得できない場合は「写真を地図に配置」で指定してください。",
     "Photo import details": "写真の取り込み情報",
     "Import details unavailable for this saved photo. Re-import the original photo to check the selection method.": "この保存済み写真には取り込み情報がありません。同じ元写真を再度取り込むと選択方式を確認できます。",
     "EXIF parse error": "EXIF解析エラー",

@@ -479,8 +479,7 @@ class App {
 
     const photoInput = el('input', {
       type: 'file',
-      // A general file picker lets users choose original camera files instead
-      // of a mobile media provider's potentially GPS-redacted photo copy.
+      // Read selected files directly; mobile providers may redact EXIF GPS.
       accept: '*/*',
       style: 'display:none',
       onchange: () => void this.onPhotoTaken(photoInput)
@@ -490,7 +489,7 @@ class App {
       'button',
       {
         class: 'btn accent',
-        title: 'Select the original photo from Files to preserve EXIF GPS',
+        title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.',
         onclick: () => {
           const selection = pickPhotoFile(() => photoInput.click());
           // Start the GPS fix in the same gesture, after opening the picker.
@@ -609,9 +608,7 @@ class App {
     const open = !!candidate || !!photo;
     const strip = el('div', { class: 'field-strip' },
       el('span', { class: 'field-strip-title' }, `Photos (${s.photos.length})`),
-      el('span', { class: 'hint photo-picker-status' }, supportsPhotoFilePicker()
-        ? 'Photo picker: File System Access API'
-        : 'Photo picker: standard file input (File System Access API unavailable)'),
+      el('span', { class: 'hint photo-picker-status', title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.' }, 'Photo file selection: recommended for PC'),
       ...s.photos.map((p, index) => el('button', {
         class: 'field-photo-button' + (photo?.id === p.id ? ' selected' : ''),
         'aria-label': `Open photo ${index + 1}`,
@@ -1514,6 +1511,7 @@ class App {
     const info = photo.importInfo;
     return el('div', { class: 'photo-import-info' },
       el('b', {}, 'Photo import details'),
+      el('div', { class: 'row hint' }, 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.'),
       el('div', { class: 'row' }, supportsPhotoFilePicker()
         ? 'Photo picker: File System Access API'
         : 'Photo picker: standard file input (File System Access API unavailable)'),
