@@ -357,7 +357,8 @@ class App {
   private async renderSurveyList(): Promise<void> {
     this.setMode('list', 'OSM Photo Mapper');
     this.bottombar.replaceChildren(
-      el('button', { class: 'btn primary', onclick: () => void this.newSurvey() }, '+ New survey')
+      el('button', { class: 'btn primary', onclick: () => void this.newSurvey('live') }, 'Field survey (live mode)'),
+      el('button', { class: 'btn primary', onclick: () => void this.newSurvey('static') }, 'Photo analysis (static mode)')
     );
 
     const metas = await surveyDb.listSurveys();
@@ -366,7 +367,7 @@ class App {
         el(
           'div',
           { class: 'empty-hint' },
-          'No surveys yet.\nStart one, walk around, photograph interesting objects, then map the photos.'
+          'Choose live mode to take photos with the camera, or static mode to select existing photos.'
         )
       );
       return;
@@ -390,6 +391,7 @@ class App {
             'div',
             { class: 'meta' },
             el('div', { class: 'name' }, full.name),
+            el('div', { class: 'sub' }, full.captureMode === 'static' ? 'Photo analysis (static mode)' : 'Field survey (live mode)'),
             el(
               'div',
               { class: 'sub' },
@@ -411,10 +413,11 @@ class App {
     this.content.replaceChildren(el('div', { class: 'section-title' }, 'Surveys'), ...items);
   }
 
-  private async newSurvey(): Promise<void> {
+  private async newSurvey(captureMode: 'live' | 'static'): Promise<void> {
     const survey: Survey = {
       id: `survey-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      name: `Survey ${new Date().toLocaleDateString()}`,
+      captureMode,
+      name: `${t(captureMode === 'live' ? 'Field survey (live mode)' : 'Photo analysis (static mode)')} ${new Date().toLocaleDateString()}`,
       createdAt: Date.now(),
       gpsSamples: [],
       photos: [],
@@ -432,7 +435,7 @@ class App {
     // OrientationTracker — the single normalized orientation path — is
     // live BEFORE the first photo, not only when the photo button is
     // pressed. Idempotent; the photo button calls it again.
-    this.orientationTracker.start();
+    if (this.survey?.captureMode !== 'static') this.orientationTracker.start();
     this.render();
   }
 
@@ -444,7 +447,7 @@ class App {
     // Issue #3: ensure the normalized orientation path is live when the
     // survey opens (user gesture; idempotent), so camera headings are
     // available from the very first capture.
-    this.orientationTracker.start();
+    if (survey.captureMode !== 'static') this.orientationTracker.start();
     this.mode = 'survey';
     this.render();
   }
@@ -492,17 +495,8 @@ class App {
         title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.',
         onclick: () => {
           const selection = pickPhotoFile(() => photoInput.click());
-          // Start the GPS fix in the same gesture, after opening the picker.
-          // Never await GPS before requesting file access.
-          this.pendingFix = requestOneShotFix(15_000);
-          // Issue #3: the orientation permission (iOS) also requires a user
-          // gesture, so start the tracker in this same gesture.
-          this.orientationTracker.start();
-          // Issue #13 phase 1: record the picker launch moment NOW (in this
-          // user gesture) — it is the earliest instant the external camera
-          // could possibly have composed the shot. Orientation readings
-          // taken before this are pre-camera evidence, never bearing.
-          this.pickerLaunchTs = Date.now();
+          this.pendingFix = null;
+          this.pickerLaunchTs = undefined;
           void selection.then((file) => {
             if (file && this.survey?.id === s.id && this.mode !== 'list') return this.onPhotoFile(file, 'file-system-access');
             if (file === null) {
@@ -538,13 +532,12 @@ class App {
     // at the shutter moment (only offered where getUserMedia exists).
     const inappBtn = el(
       'button',
-      { class: 'btn', onclick: () => void this.openInAppCamera() },
+      { class: 'btn', disabled: !InAppCamera.available(), onclick: () => void this.openInAppCamera() },
       '📸 In-app'
     );
 
     this.bottombar.replaceChildren(
-      camBtn,
-      ...(InAppCamera.available() ? [inappBtn] : []),
+      ...(s.captureMode === 'static' ? [camBtn] : [inappBtn]),
       note,
       mapBtn,
       photoInput
@@ -608,7 +601,7 @@ class App {
     const open = !!candidate || !!photo;
     const strip = el('div', { class: 'field-strip' },
       el('span', { class: 'field-strip-title' }, `Photos (${s.photos.length})`),
-      el('span', { class: 'hint photo-picker-status', title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.' }, 'Photo file selection: recommended for PC'),
+      ...(s.captureMode === 'static' ? [el('span', { class: 'hint photo-picker-status', title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.' }, 'Photo file selection: recommended for PC')] : []),
       ...s.photos.map((p, index) => el('button', {
         class: 'field-photo-button' + (photo?.id === p.id ? ' selected' : ''),
         'aria-label': `Open photo ${index + 1}`,
@@ -658,7 +651,7 @@ class App {
 
   private async startSurveyGps(): Promise<void> {
     const survey = this.survey;
-    if (!survey || this.tracker) return;
+    if (!survey || survey.captureMode === 'static' || this.tracker) return;
     this.gpsState = 'acquiring';
     survey.recording = false;
     const tracker = new GeolocationTracker(survey.id, (sample) => {
@@ -725,6 +718,10 @@ class App {
   private refreshGpsStatus(): void {
     const s = this.survey;
     if (!s) return;
+    if (s.captureMode === 'static') {
+      this.gpsStatus.classList.add('hidden');
+      return;
+    }
     const now = Date.now();
     // While recording, the newest track sample IS the live fix.
     const last = s.gpsSamples[s.gpsSamples.length - 1];

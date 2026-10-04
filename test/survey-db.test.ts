@@ -199,6 +199,19 @@ describe('linkedOsmType backfill (issue #4)', () => {
 });
 
 describe('fresh v2 database', () => {
+  it('retains capture mode after saving and reopening a survey', async () => {
+    for (const captureMode of ['live', 'static'] as const) {
+      const survey: Survey = {
+        id: captureMode, name: captureMode, createdAt: 1, captureMode,
+        recording: false, gpsSamples: [], photos: [], candidates: []
+      };
+      await surveyDb.createSurvey(survey);
+      expect((await surveyDb.loadSurvey(captureMode))?.captureMode).toBe(captureMode);
+      await surveyDb.saveSurveyMeta({ ...survey, name: 'Updated' });
+      expect((await surveyDb.listSurveys()).find((s) => s.id === captureMode)?.captureMode).toBe(captureMode);
+    }
+  });
+
   it('creates metadata-only survey rows on a fresh install', async () => {
     await surveyDb.createSurvey({
       id: 's9',

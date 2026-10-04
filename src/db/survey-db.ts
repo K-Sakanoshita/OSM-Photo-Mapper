@@ -32,6 +32,7 @@ function metaOnly(row: Survey): SurveyMeta {
     id: row.id,
     name: row.name,
     createdAt: row.createdAt,
+    ...(row.captureMode ? { captureMode: row.captureMode } : {}),
     recording: row.recording === true
   };
 }

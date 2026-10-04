@@ -338,6 +338,8 @@ export interface FeatureCandidate {
  * never carries (duplicates) image payloads or stale child arrays.
  */
 export interface SurveyMeta {
+  /** Missing on older surveys; these retain live mode. */
+  captureMode?: 'live' | 'static';
   id: string;
   name: string;
   createdAt: number;
