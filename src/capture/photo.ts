@@ -114,6 +114,7 @@ export function parseExifDateTime(s: unknown): number | undefined {
 }
 
 type ExifData = {
+  _readError?: string;
   DateTimeOriginal?: unknown;
   DateTimeDigitized?: unknown;
   DateTime?: unknown;
@@ -132,9 +133,18 @@ export async function readExif(file: File): Promise<ExifData> {
       tiff: true, exif: true, gps: true,
       translateValues: false, reviveValues: false
     })) ?? {};
-  } catch {
+  } catch (error) {
     // EXIF unreadable — no EXIF data.
-    return {};
+    return { _readError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function photoFileHash(file: File): Promise<string | undefined> {
+  try {
+    const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return undefined;
   }
 }
 
@@ -343,7 +353,12 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
       fileName: input.file.name,
       fileSize: input.file.size,
       selectionMethod: input.selectionMethod ?? 'file-input',
-      exifGpsRead: exifGpsFromData(exifData) != null
+      exifGpsRead: exifGpsFromData(exifData) != null,
+      sha256: await photoFileHash(input.file),
+      exifReadError: exifData._readError,
+      exifTagCount: Object.keys(exifData).filter((key) => key !== '_readError').length,
+      gpsTags: JSON.stringify({ latitude: exifData.GPSLatitude ?? null, latitudeRef: exifData.GPSLatitudeRef ?? null,
+        longitude: exifData.GPSLongitude ?? null, longitudeRef: exifData.GPSLongitudeRef ?? null })
     } } : {}),
     note: input.note
   };

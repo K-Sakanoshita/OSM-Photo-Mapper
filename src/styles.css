@@ -667,3 +667,5 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
   outline-offset: 3px;
   box-shadow: 0 0 0 10px rgba(255, 202, 40, 0.4), 0 2px 6px #555 !important;
 }
+
+.file-fingerprint { overflow-wrap: anywhere; font-size: 11px; }

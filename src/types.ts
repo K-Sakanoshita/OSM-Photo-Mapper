@@ -114,6 +114,10 @@ export interface Photo {
     fileSize: number;
     selectionMethod: 'file-system-access' | 'file-input';
     exifGpsRead: boolean;
+    sha256?: string;
+    exifReadError?: string;
+    exifTagCount?: number;
+    gpsTags?: string;
   };
   id: string;
   surveyId: string;

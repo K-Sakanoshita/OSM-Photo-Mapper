@@ -1521,7 +1521,11 @@ class App {
         el('div', { class: 'row' }, `${t('Selected file')}: ${info.fileName}`),
         el('div', { class: 'row' }, `${t('File size')}: ${info.fileSize.toLocaleString()} ${t('bytes')}`),
         el('div', { class: 'row' }, `${t('Selection method')}: ${info.selectionMethod === 'file-system-access' ? 'File System Access API' : t('Standard file input')}`),
-        el('div', { class: 'row' }, info.exifGpsRead ? 'EXIF GPS: read successfully' : 'EXIF GPS: not found in selected file')
+        el('div', { class: 'row' }, info.exifGpsRead ? 'EXIF GPS: read successfully' : 'EXIF GPS: not found in selected file'),
+        ...(info.exifReadError ? [el('div', { class: 'row' }, `${t('EXIF parse error')}: ${info.exifReadError}`)] : []),
+        ...(info.exifTagCount != null ? [el('div', { class: 'row' }, `${t('EXIF tag count')}: ${info.exifTagCount}`)] : []),
+        ...(info.sha256 ? [el('div', { class: 'row file-fingerprint' }, `SHA-256: ${info.sha256}`)] : []),
+        ...(info.gpsTags ? [el('div', { class: 'row file-fingerprint' }, `GPS tags: ${info.gpsTags}`)] : [])
       ] : [el('div', { class: 'row' }, 'Import details unavailable for this saved photo. Re-import the original photo to check the selection method.')])
     );
   }

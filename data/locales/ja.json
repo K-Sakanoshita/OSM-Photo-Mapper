@@ -303,7 +303,9 @@
     "EXIF GPS: read successfully": "EXIF GPS：読み取り成功",
     "EXIF GPS: not found in selected file": "EXIF GPS：選択されたファイルに座標なし",
     "Photo import details": "写真の取り込み情報",
-    "Import details unavailable for this saved photo. Re-import the original photo to check the selection method.": "この保存済み写真には取り込み情報がありません。同じ元写真を再度取り込むと選択方式を確認できます。"
+    "Import details unavailable for this saved photo. Re-import the original photo to check the selection method.": "この保存済み写真には取り込み情報がありません。同じ元写真を再度取り込むと選択方式を確認できます。",
+    "EXIF parse error": "EXIF解析エラー",
+    "EXIF tag count": "読み取ったEXIF項目数"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

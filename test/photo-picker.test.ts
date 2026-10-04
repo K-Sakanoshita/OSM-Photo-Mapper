@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { pickPhotoFile } from '../src/capture/photo-picker';
-import { exifGpsFromData, readExif } from '../src/capture/photo';
+import { exifGpsFromData, readExif, photoFileHash } from '../src/capture/photo';
 
 describe('original photo picker', () => {
   it('opens immediately and reads original bytes with EXIF GPS intact', async () => {
@@ -15,6 +16,7 @@ describe('original photo picker', () => {
     expect(result).toBe(file);
     expect(new Uint8Array(await result!.arrayBuffer())).toEqual(new Uint8Array(bytes));
     expect(exifGpsFromData(await readExif(result!))?.lat).toBeCloseTo(35.681, 5);
+    expect(await photoFileHash(result!)).toBe(createHash('sha256').update(bytes).digest('hex'));
     expect(fallback).not.toHaveBeenCalled();
   });
 
