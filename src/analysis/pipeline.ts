@@ -124,7 +124,15 @@ export class SurveyAnalysisPipeline {
 
     const context = {
       surveyId: survey.id,
-      featureClasses: FEATURE_CLASSES.map((c) => ({ id: c.id, label: c.label }))
+      featureClasses: FEATURE_CLASSES.map((c) => ({
+        id: c.id,
+        label: c.label,
+        visualAttributes: c.visualAttributeKeys?.map((key) => ({
+          key,
+          allowedValues: c.commonValues?.[key]
+        })),
+        visualHint: c.visualHint
+      }))
     };
 
     const observations: Observation[] = [];

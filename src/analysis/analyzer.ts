@@ -90,11 +90,16 @@ export interface AnalysisContext {
   /** The photo being analyzed (image data URL, capture time, camera…). */
   photo: Photo;
   /**
-   * The supported feature classes the provider may return (id + label),
+   * The supported feature classes and visually inferable metadata,
    * so the provider's prompt/schema knows the closed vocabulary. Anything
    * else must be reported as 'unknown'.
    */
-  featureClasses: { id: string; label: string }[];
+  featureClasses: {
+    id: string;
+    label: string;
+    visualAttributes?: { key: string; allowedValues?: string[] }[];
+    visualHint?: string;
+  }[];
 }
 
 /**

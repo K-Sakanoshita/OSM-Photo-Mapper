@@ -74,9 +74,11 @@ const HASH_B = 'bbbbbbbbbbbbbbbb'; // hamming distance to A: 32 > 12
 class FakeAnalyzer implements ImageObservationAnalyzer {
   name = 'fake';
   photos: Photo[] = [];
+  contexts: AnalysisContext[] = [];
   constructor(private readonly fn: (p: Photo) => unknown) {}
-  async analyzePhoto(photo: Photo, _ctx: AnalysisContext): Promise<VisualObservation[]> {
+  async analyzePhoto(photo: Photo, ctx: AnalysisContext): Promise<VisualObservation[]> {
     this.photos.push(photo);
+    this.contexts.push(ctx);
     const out = await this.fn(photo);
     if (out instanceof Error) throw out;
     return out as VisualObservation[];
@@ -127,6 +129,44 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
   });
 
   describe('OCR / attribute trust policy', () => {
+    it('exposes only explicitly visual class metadata to the provider', async () => {
+      const survey = makeSurvey([makePhoto('p1')]);
+      const analyzer = new FakeAnalyzer(() => []);
+      await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      const classes = analyzer.contexts[0].featureClasses;
+      expect(classes.find((c) => c.id === 'playground')?.visualAttributes).toEqual([
+        { key: 'playground', allowedValues: ['slide', 'swing', 'roundabout', 'sandbox', 'other'] }
+      ]);
+      expect(classes.find((c) => c.id === 'toilets')?.visualAttributes).toBeUndefined();
+      expect(JSON.stringify(classes)).not.toContain('requiredTags');
+      expect(JSON.stringify(classes)).not.toContain('geometryPreference');
+    });
+
+    it('confirms a visible swing subtype while preserving distinct objects in one photo', async () => {
+      const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
+      const analyzer = new FakeAnalyzer(() => [
+        vis({ featureType: 'playground', bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.5 }, detectionConfidence: 0.99, attributes: { playground: 'swing' } }),
+        vis({ featureType: 'playground', bbox: { x: 0.65, y: 0.25, w: 0.2, h: 0.4 }, detectionConfidence: 0.91, attributes: { playground: 'slide' } }),
+        vis({ featureType: 'bench', bbox: { x: 0.55, y: 0.75, w: 0.15, h: 0.1 }, detectionConfidence: 0.8 })
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.observations).toHaveLength(3);
+      expect(res.candidates).toHaveLength(3);
+      expect(res.candidates.map((c) => c.tags)).toContainEqual({ playground: 'swing' });
+      expect(res.candidates.map((c) => c.tags)).toContainEqual({ playground: 'slide' });
+      expect(res.candidates.map((c) => c.tags)).toContainEqual({ amenity: 'bench' });
+    });
+
+    it('keeps an invalid playground subtype unconfirmed', async () => {
+      const survey = makeSurvey([makePhoto('p1')]);
+      const analyzer = new FakeAnalyzer(() => [
+        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { playground: 'seesaw' } })
+      ]);
+      const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+      expect(res.observations[0].detectedAttributes).toEqual({ playground: 'seesaw' });
+      expect(res.candidates[0].tags).not.toHaveProperty('playground');
+    });
+
     it('carries OCR text as evidence and NEVER turns it into name=*', async () => {
       const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
       const analyzer = new FakeAnalyzer(() => [

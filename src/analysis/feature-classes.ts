@@ -71,6 +71,10 @@ export interface FeatureClass {
   /** Known allowed values for keys whose value cannot be inferred from
    *  the class alone. Offered as a review-time picker. */
   commonValues?: Record<string, string[]>;
+  /** Attribute keys the vision provider may infer from visible evidence. */
+  visualAttributeKeys?: string[];
+  /** Recognition guidance; never contains OSM tagging policy. */
+  visualHint?: string;
   /** Short explanation for reviewers. */
   hint: string;
   /** true — requiredTags may be applied by default (established
@@ -330,6 +334,8 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     requiredTags: {},
     suggestedTags: {},
     commonValues: { playground: ['slide', 'swing', 'roundabout', 'sandbox', 'other'] },
+    visualAttributeKeys: ['playground'],
+    visualHint: 'Identify each complete piece of equipment. A swing frame with multiple seats is one swing.',
     hint: 'Single piece of playground equipment; the type must be confirmed, not guessed',
     autoTag: true,
     geometryPreference: 'node'
@@ -344,6 +350,7 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     // draw the boundary in an editor.
     requiredTags: { leisure: 'playground' },
     suggestedTags: {},
+    visualHint: 'The whole playground facility, not an individual piece of equipment.',
     hint: 'Playground facility; area-based — the app will not create geometry for it, so link or draw in an editor',
     autoTag: true,
     geometryPreference: 'area'

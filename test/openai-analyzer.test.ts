@@ -25,7 +25,13 @@ function makeContext(photo: Photo): AnalysisContext {
     photo,
     featureClasses: [
       { id: 'bench', label: 'Bench' },
-      { id: 'toilets', label: 'Public toilets' }
+      { id: 'toilets', label: 'Public toilets' },
+      {
+        id: 'playground',
+        label: 'Playground equipment',
+        visualAttributes: [{ key: 'playground', allowedValues: ['slide', 'swing', 'roundabout', 'sandbox', 'other'] }],
+        visualHint: 'A swing frame with multiple seats is one swing.'
+      }
     ]
   };
 }
@@ -102,6 +108,18 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     expect(res[0].detectionConfidence).toBe(0.85);
   });
 
+  it('preserves separate boxes and visual attributes for multiple objects, including the same class', async () => {
+    const firstBox = { x: 0.1, y: 0.2, w: 0.3, h: 0.5 };
+    const secondBox = { x: 0.6, y: 0.3, w: 0.2, h: 0.4 };
+    const res = await analyzer(stubFetch(responsesWith([
+      { featureType: 'playground', bbox: firstBox, attributes: [{ key: 'playground', value: 'swing' }], detectionConfidence: 0.99 },
+      { featureType: 'playground', bbox: secondBox, attributes: [{ key: 'playground', value: 'slide' }], detectionConfidence: 0.88 }
+    ]))).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(res).toHaveLength(2);
+    expect(res.map((item) => item.bbox)).toEqual([firstBox, secondBox]);
+    expect(res.map((item) => item.attributes.playground)).toEqual(['swing', 'slide']);
+  });
+
   it('sends the Responses API request: key, image, vocabulary, json_schema text.format', async () => {
     await analyzer().analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
     // Direct mode hits the OpenAI Responses API endpoint.
@@ -118,6 +136,11 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     // Closed vocabulary + rules travel via top-level `instructions`.
     expect(body.instructions).toContain('- bench (Bench)');
     expect(body.instructions).toContain('- toilets (Public toilets)');
+    expect(body.instructions).toContain('playground: slide | swing | roundabout | sandbox | other');
+    expect(body.instructions).toContain('A swing frame with multiple seats is one swing.');
+    expect(body.instructions).toContain('foreground, background, edges, and partly occluded objects');
+    expect(body.instructions).toContain('multiple features of the same class');
+    expect(body.instructions).toContain('include a value when clearly identifiable');
     expect(body.instructions).toContain('unknown');
     // The image + prompt travel as input message items.
     const msg = inputMessage(body);
