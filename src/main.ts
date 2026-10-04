@@ -602,11 +602,14 @@ class App {
     const strip = el('div', { class: 'field-strip' },
       el('span', { class: 'field-strip-title' }, `Photos (${s.photos.length})`),
       ...(s.captureMode === 'static' ? [el('span', { class: 'hint photo-picker-status', title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.' }, 'Photo file selection: recommended for PC')] : []),
-      ...s.photos.map((p, index) => el('button', {
-        class: 'field-photo-button' + (photo?.id === p.id ? ' selected' : ''),
-        'aria-label': `Open photo ${index + 1}`,
-        onclick: () => this.selectFieldPhoto(p.id)
-      }, p.image ? el('img', { src: p.image, alt: '' }) : `Photo ${index + 1}`)),
+      ...s.photos.map((p, index) => el('div', { class: 'photo-frame photo-thumbnail' },
+        el('button', {
+          class: 'field-photo-button' + (photo?.id === p.id ? ' selected' : ''),
+          'aria-label': `Open photo ${index + 1}`,
+          onclick: () => this.selectFieldPhoto(p.id)
+        }, p.image ? el('img', { src: p.image, alt: '' }) : `Photo ${index + 1}`),
+        this.photoDetailsButton(p, true)
+      )),
       ...s.candidates.map((c, index) => el('button', {
         class: 'btn small' + (candidate?.id === c.id ? ' selected' : ''),
         onclick: () => this.selectFieldCandidate(c.id)
@@ -629,12 +632,7 @@ class App {
       appendLocalized(details,
         el('div', { class: 'candidate' },
           el('div', { class: 'head' }, el('strong', {}, 'Photo')),
-          this.buildPhotoImportInfo(photo),
-          ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
-          el('div', { class: 'row' }, `Captured: ${new Date(photo.timestamp).toLocaleString()} (${photo.timestampSource ?? 'unknown time source'})`),
-          el('div', { class: 'row' }, photo.cameraPosition
-            ? `Camera: ${t(describeCameraPosition(photo.cameraPosition))} @ ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
-            : 'Camera: no GPS'),
+          ...(photo.image ? [el('div', { class: 'photo-frame' }, el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' }), this.photoDetailsButton(photo))] : [this.photoDetailsButton(photo)]),
           el('div', { class: 'row' }, `Note: ${photo.note || 'none'}`),
           el('div', { class: 'row' }, `Associated candidates: ${related.length}`),
           ...related.map((c) => el('button', { class: 'btn small', onclick: () => this.selectFieldCandidate(c.id) },
@@ -1504,6 +1502,38 @@ class App {
     return map;
   }
 
+  private photoDetailsButton(photo: Photo, compact = false): HTMLButtonElement {
+    return el('button', {
+      class: 'photo-details-button',
+      'aria-label': 'Photo details',
+      title: 'Photo details',
+      onclick: (event) => { event.stopPropagation(); this.showPhotoDetails(photo); }
+    }, compact ? 'ⓘ' : 'Details');
+  }
+
+  private showPhotoDetails(photo: Photo): void {
+    const dialog = el('dialog', { class: 'photo-details-dialog', 'aria-label': 'Photo details' }) as HTMLDialogElement;
+    const close = el('button', { class: 'btn', onclick: () => dialog.close() }, 'Close');
+    const heading = photo.cameraHeading;
+    appendLocalized(dialog,
+      el('div', { class: 'photo-details-header' }, el('h2', {}, 'Photo details'), close),
+      ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
+      el('div', { class: 'row' }, `${t('Captured')}: ${new Date(photo.timestamp).toLocaleString()} (${photo.timestampSource ?? t('unknown')})`),
+      el('div', { class: 'row' }, photo.cameraPosition
+        ? `${t('Camera')}: ${t(describeCameraPosition(photo.cameraPosition))} @ ${photo.cameraPosition.lat.toFixed(6)}, ${photo.cameraPosition.lon.toFixed(6)}`
+        : 'Camera: no GPS'),
+      el('div', { class: 'row' }, `${t('Cam heading')}: ${heading
+        ? `${heading.bearing.toFixed(0)}° · ${t(heading.source)} · ±${heading.uncertaintyDeg}° · ${t(`age ${Math.round(heading.ageMs / 1000)} s`)}${heading.detail ? ` · ${t(heading.detail)}` : ''}`
+        : t(photo.headingNote ?? 'No orientation reading')}`),
+      el('div', { class: 'row' }, `${t('Note')}: ${photo.note || t('none')}`),
+      this.buildPhotoImportInfo(photo)
+    );
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+    close.focus();
+  }
+
   private buildPhotoImportInfo(photo: Photo): HTMLElement {
     const info = photo.importInfo;
     return el('div', { class: 'photo-import-info' },
@@ -1541,8 +1571,11 @@ class App {
     const evidence = c.observationIds.map((id) => obsById.get(id)).filter((o): o is Observation => !!o);
     const first = evidence.find((o) => !!photoByObs.get(o.id)?.image);
     const img = first ? photoByObs.get(first.id)?.image ?? '' : '';
-    const thumb = c.analyzer === 'manual' ? el('span', { class: 'manual-thumb', 'aria-hidden': 'true' }, '📍')
+    const thumbImage = c.analyzer === 'manual' ? el('span', { class: 'manual-thumb', 'aria-hidden': 'true' }, '📍')
       : el('img', { class: 'thumb', src: img || undefined, alt: 'source photo' });
+
+    const thumbPhoto = first ? photoByObs.get(first.id) : undefined;
+    const thumb = thumbPhoto ? el('div', { class: 'photo-frame photo-thumbnail' }, thumbImage, this.photoDetailsButton(thumbPhoto, true)) : thumbImage;
 
     const statusSel = el('select', {
       class: 'status-sel',
@@ -1576,7 +1609,9 @@ class App {
       return [photo?.id, photo] as const;
     }).filter((entry): entry is readonly [string, Photo] => !!entry[0] && !!entry[1])).values()];
     if (c.analyzer !== 'manual' && !sourcePhotos.length && this.survey?.photos.length === 1) sourcePhotos.push(this.survey.photos[0]);
-    for (const photo of sourcePhotos) appendLocalized(card, this.buildPhotoImportInfo(photo));
+    for (const photo of sourcePhotos) {
+      if (!evidence.some((obs) => photoByObs.get(obs.id)?.id === photo.id)) appendLocalized(card, this.photoDetailsButton(photo));
+    }
 
     for (const obs of evidence) {
       const sourceImage = photoByObs.get(obs.id)?.image;
@@ -1584,6 +1619,7 @@ class App {
         const box = obs.bbox;
         appendLocalized(card, el('div', { class: 'evidence-photo' },
           el('img', { src: sourceImage, alt: `Source photo with ${obs.featureType} detection box` }),
+          this.photoDetailsButton(photoByObs.get(obs.id)!),
           el('div', { class: 'evidence-box', style: `left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%` })
         ));
       }
