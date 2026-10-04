@@ -292,6 +292,7 @@ class App {
     }
     this.updateRecBadge();
     this.updateUndoButton();
+    this.mapView.setSelectedCandidate(this.selectedFieldCandidateId);
     if (mode !== 'survey') this.stopGpsStatus();
     requestAnimationFrame(() => this.mapView.map.resize());
   }
@@ -564,11 +565,25 @@ class App {
     this.startGpsStatus();
   }
 
-  private selectFieldCandidate(id: string): void {
-    if (this.mode !== 'survey' || !this.survey?.candidates.some((c) => c.id === id)) return;
+  private selectFieldCandidate(id: string, scrollToCard = true): void {
+    if ((this.mode !== 'survey' && this.mode !== 'review') || !this.survey?.candidates.some((c) => c.id === id)) return;
+    const changed = this.selectedFieldCandidateId !== id;
     this.selectedFieldCandidateId = id;
     this.selectedFieldPhotoId = null;
+    this.mapView.setSelectedCandidate(id);
     const candidate = this.survey.candidates.find((c) => c.id === id);
+    if (this.mode === 'survey' && !changed) return;
+    if (this.mode === 'review') {
+      for (const card of this.content.querySelectorAll<HTMLElement>('.candidate[data-candidate-id]')) {
+        const selected = card.dataset.candidateId === id;
+        card.classList.toggle('selected', selected);
+        if (selected && scrollToCard) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+      if (changed && !scrollToCard && candidate?.lat != null && candidate.lon != null) {
+        this.mapView.map.easeTo({ center: [candidate.lon, candidate.lat], duration: 250 });
+      }
+      return;
+    }
     void this.renderFieldInspector().then(() => {
       if (this.mode === 'survey' && candidate?.lat != null && candidate.lon != null) {
         this.mapView.map.easeTo({ center: [candidate.lon, candidate.lat], offset: [0, -Math.round(window.innerHeight * 0.22)], duration: 250 });
@@ -580,6 +595,7 @@ class App {
     if (this.mode !== 'survey' || !this.survey?.photos.some((p) => p.id === id)) return;
     this.selectedFieldPhotoId = id;
     this.selectedFieldCandidateId = null;
+    this.mapView.setSelectedCandidate(null);
     const photo = this.survey.photos.find((p) => p.id === id);
     void this.renderFieldInspector().then(() => {
       if (this.mode === 'survey' && photo?.gps) {
@@ -613,6 +629,7 @@ class App {
       ...(open ? [el('button', { class: 'btn small', 'aria-label': 'Close inspector', onclick: () => {
         this.selectedFieldCandidateId = null;
         this.selectedFieldPhotoId = null;
+        this.mapView.setSelectedCandidate(null);
         void this.renderFieldInspector();
       } }, 'Close')]: [])
     );
@@ -1501,7 +1518,12 @@ class App {
     obsById: Map<string, Observation>
   ): HTMLElement {
     const cls = getFeatureClass(c.featureType);
-    const card = el('div', { class: `candidate status-${c.status}` });
+    const card = el('div', {
+      class: `candidate status-${c.status}${this.selectedFieldCandidateId === c.id ? ' selected' : ''}`,
+      'data-candidate-id': c.id,
+      onclick: () => this.selectFieldCandidate(c.id, false),
+      onfocusin: () => this.selectFieldCandidate(c.id, false)
+    });
 
     const evidence = c.observationIds.map((id) => obsById.get(id)).filter((o): o is Observation => !!o);
     const first = evidence.find((o) => !!photoByObs.get(o.id)?.image);

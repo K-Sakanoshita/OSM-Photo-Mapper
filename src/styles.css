@@ -289,6 +289,7 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
   border-left: 4px solid var(--new);
 }
 .candidate.status-existing { border-left-color: var(--existing); }
+.candidate.selected { outline: 3px solid #ffca28; outline-offset: -3px; }
 .candidate.status-excluded { border-left-color: var(--excluded); opacity: 0.75; }
 
 .candidate .head { display: flex; align-items: center; gap: 10px; }

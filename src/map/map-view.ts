@@ -22,6 +22,7 @@ export class MapView {
   private photoData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private osmMarkers: maplibregl.Marker[] = [];
   private loadingIcons = new Set<string>();
+  private selectedCandidateId: string | null = null;
 
   constructor(
     container: HTMLElement,
@@ -76,8 +77,8 @@ export class MapView {
         paint: {
           'circle-radius': 21,
           'circle-color': ['get', 'color'],
-          'circle-stroke-width': 3,
-          'circle-stroke-color': '#ffffff'
+          'circle-stroke-width': ['case', ['get', 'selected'], 5, 3],
+          'circle-stroke-color': ['case', ['get', 'selected'], '#ffca28', '#ffffff']
         }
       });
       this.map.addLayer({
@@ -150,6 +151,10 @@ export class MapView {
         content.textContent = `${merged ? 'Merged · ' : ''}${id} · ${Object.entries(match.tags).map(([key, value]) => `${key}=${value}`).join(' ')}`;
         const element = document.createElement('div');
         element.className = 'osm-icon-pin';
+        const linkedIds = candidates.filter((candidate) => candidate.status === 'existing'
+          && candidate.linkedOsmId === match.osmId && (candidate.linkedOsmType ?? 'node') === match.osmType).map((candidate) => candidate.id);
+        element.dataset.candidateIds = JSON.stringify(linkedIds);
+        element.addEventListener('click', () => { if (linkedIds[0]) this.onCandidateSelected?.(linkedIds[0]); });
         element.title = `${merged ? 'Merged · ' : ''}${id}`;
         element.style.cssText = `width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:white;border:4px solid ${merged ? '#2e8b57' : '#8e44ad'};box-sizing:border-box;cursor:pointer;box-shadow:0 1px 4px #555;`;
         const image = document.createElement('img');
@@ -169,6 +174,7 @@ export class MapView {
         type: 'Feature' as const,
         properties: {
           id: c.id,
+          selected: c.id === this.selectedCandidateId,
           icon: iconForTags(c.tags),
           status: c.status,
           color: this.statusColor(c.status),
@@ -182,6 +188,20 @@ export class MapView {
       features
     };
     (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
+    this.setSelectedCandidate(this.selectedCandidateId);
+  }
+
+  setSelectedCandidate(id: string | null): void {
+    this.selectedCandidateId = id;
+    for (const feature of this.candidateData.features) {
+      if (feature.properties) feature.properties.selected = feature.properties.id === id;
+    }
+    (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
+    for (const marker of this.osmMarkers) {
+      const element = marker.getElement();
+      const selected = id != null && JSON.parse(element.dataset.candidateIds ?? '[]').includes(id);
+      element.style.outline = selected ? '4px solid #ffca28' : '';
+    }
   }
 
   private async loadIcon(filename: string): Promise<void> {
@@ -220,7 +240,7 @@ export class MapView {
 
     const moveDrag = (lng: number, lat: number, point: { x: number; y: number }): void => {
       if (!drag) return;
-      if (!drag.moved && Math.hypot(point.x - drag.startX, point.y - drag.startY) < 6) return;
+      if (!drag.moved && Math.hypot(point.x - drag.startX, point.y - drag.startY) < 20) return;
       drag.moved = true;
       drag.lon = lng;
       drag.lat = lat;
