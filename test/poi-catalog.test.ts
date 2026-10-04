@@ -19,6 +19,7 @@ describe('POI catalog', () => {
 
   it('matches a clear category and keyword but leaves ambiguous text unresolved', () => {
     expect(matchPoiKeyword('playground', 'swing')?.tags).toEqual({ playground: 'swing' });
+    expect(matchPoiKeyword('playground', 'swing set')?.tags).toEqual({ playground: 'swing' });
     expect(matchPoiKeyword('playground', 'ブランコ')?.tags).toEqual({ playground: 'swing' });
     expect(matchPoiKeyword('shop', 'bakery')?.tags).toEqual({ shop: 'bakery' });
     expect(matchPoiKeyword('shop', 'storefront')).toBeUndefined();

@@ -134,6 +134,25 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     expect(JSON.stringify(bodies[0])).not.toContain('playground_swing');
   });
 
+  it('resolves the observed equipment=swing set without a second API request', async () => {
+    let requests = 0;
+    const fetchImpl = (async () => {
+      requests++;
+      return new Response(responsesWith([
+        { featureType: 'playground', bbox: BOX, attributes: [
+          { key: 'equipment', value: 'swing set' },
+          { key: 'material', value: 'metal frame and chains' },
+          { key: 'seats', value: '2' }
+        ], detectionConfidence: 0.99 }
+      ]), { status: 200 });
+    }) as typeof fetch;
+    const result = await analyzer(fetchImpl).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(requests).toBe(1);
+    expect(result).toEqual([expect.objectContaining({ featureType: 'playground', attributes: {
+      playground: 'swing', material: 'metal frame and chains', seats: '2'
+    } })]);
+  });
+
   it('continues an unresolved shop with text-only subtype choices and the previous response ID', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchImpl = (async (_url: string, init?: RequestInit) => {

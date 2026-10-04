@@ -88,7 +88,7 @@
       "wiki": "https://wiki.openstreetmap.org/wiki/Key:playground",
       "taginfo": "https://taginfo.openstreetmap.org/keys/playground",
       "entries": [
-        { "id": "playground_swing", "featureType": "playground", "label": "Swing", "keywords": ["swing", "ブランコ"], "tags": { "playground": "swing" } },
+        { "id": "playground_swing", "featureType": "playground", "label": "Swing", "keywords": ["swing", "swing set", "ブランコ"], "tags": { "playground": "swing" } },
         { "id": "playground_slide", "featureType": "playground", "label": "Slide", "keywords": ["slide", "滑り台"], "tags": { "playground": "slide" } },
         { "id": "playground_sandpit", "featureType": "playground", "label": "Sandpit", "keywords": ["sandpit", "sandbox", "砂場"], "tags": { "playground": "sandpit" } },
         { "id": "playground_seesaw", "featureType": "playground", "label": "Seesaw", "keywords": ["seesaw", "シーソー"], "tags": { "playground": "seesaw" } },
