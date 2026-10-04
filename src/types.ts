@@ -109,6 +109,12 @@ export interface CameraHeading {
  * consumers (map markers, ray estimation, position evidence).
  */
 export interface Photo {
+  importInfo?: {
+    fileName: string;
+    fileSize: number;
+    selectionMethod: 'file-system-access' | 'file-input';
+    exifGpsRead: boolean;
+  };
   id: string;
   surveyId: string;
   /** Epoch milliseconds of capture. */

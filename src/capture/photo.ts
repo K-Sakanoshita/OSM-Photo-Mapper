@@ -61,6 +61,7 @@ export interface CapturedPhotoInput {
   /** EXTERNAL path: the image file from the OS camera / photo library.
    *  EXIF (capture time, GPS, image direction) is parsed from it. */
   file?: File;
+  selectionMethod?: 'file-system-access' | 'file-input';
   /** IN-APP path (issue #13 phase 2): a pre-encoded JPEG data URL
    *  captured from the getUserMedia video at the shutter moment. When
    *  provided, the file/EXIF path is skipped entirely (a canvas frame
@@ -338,6 +339,12 @@ export async function capturePhoto(input: CapturedPhotoInput): Promise<Photo> {
     image,
     cameraPosition,
     gps: undefined,
+    ...(input.file ? { importInfo: {
+      fileName: input.file.name,
+      fileSize: input.file.size,
+      selectionMethod: input.selectionMethod ?? 'file-input',
+      exifGpsRead: exifGpsFromData(exifData) != null
+    } } : {}),
     note: input.note
   };
 

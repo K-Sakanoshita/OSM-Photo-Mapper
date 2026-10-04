@@ -2,6 +2,10 @@ interface PhotoPickerHost {
   showOpenFilePicker?: (options: { multiple: false; startIn: 'pictures' }) => Promise<Array<{ getFile(): Promise<File> }>>;
 }
 
+export function supportsPhotoFilePicker(host: PhotoPickerHost = window as Window & PhotoPickerHost): boolean {
+  return typeof host.showOpenFilePicker === 'function';
+}
+
 /** Return the original File without decoding or re-encoding its bytes.
  * undefined means the legacy input picker was opened; null means cancelled. */
 export async function pickPhotoFile(

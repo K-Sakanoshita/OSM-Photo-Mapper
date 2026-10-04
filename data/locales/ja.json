@@ -292,7 +292,16 @@
     "Select the original photo from Files to preserve EXIF GPS": "EXIFのGPS情報を保持するため、「ファイル」から元写真を選択してください",
     "Select an image file": "画像ファイルを選択してください",
     "Photo has no GPS. Select the original file from Files, or place its pin manually.": "写真にGPSがありません。「ファイル」から元写真を選択するか、地図上にピンを配置してください。",
-    "No camera heading": "カメラの方位なし"
+    "No camera heading": "カメラの方位なし",
+    "Photo picker: File System Access API": "写真選択：File System Access API",
+    "Photo picker: standard file input (File System Access API unavailable)": "写真選択：通常のファイル選択（File System Access API非対応）",
+    "Selected file": "選択ファイル",
+    "File size": "ファイルサイズ",
+    "bytes": "バイト",
+    "Selection method": "実際の選択方式",
+    "Standard file input": "通常のファイル選択",
+    "EXIF GPS: read successfully": "EXIF GPS：読み取り成功",
+    "EXIF GPS: not found in selected file": "EXIF GPS：選択されたファイルに座標なし"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

@@ -14,7 +14,7 @@ import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
 import { capturePhoto, restorePhotoGps } from './capture/photo';
-import { pickPhotoFile } from './capture/photo-picker';
+import { pickPhotoFile, supportsPhotoFilePicker } from './capture/photo-picker';
 import { InAppCamera } from './capture/inapp-camera';
 import {
   requestOneShotFix,
@@ -505,7 +505,7 @@ class App {
           // taken before this are pre-camera evidence, never bearing.
           this.pickerLaunchTs = Date.now();
           void selection.then((file) => {
-            if (file && this.survey?.id === s.id && this.mode !== 'list') return this.onPhotoFile(file);
+            if (file && this.survey?.id === s.id && this.mode !== 'list') return this.onPhotoFile(file, 'file-system-access');
             if (file === null) {
               this.pendingFix = null;
               this.pickerLaunchTs = undefined;
@@ -609,6 +609,9 @@ class App {
     const open = !!candidate || !!photo;
     const strip = el('div', { class: 'field-strip' },
       el('span', { class: 'field-strip-title' }, `Photos (${s.photos.length})`),
+      el('span', { class: 'hint photo-picker-status' }, supportsPhotoFilePicker()
+        ? 'Photo picker: File System Access API'
+        : 'Photo picker: standard file input (File System Access API unavailable)'),
       ...s.photos.map((p, index) => el('button', {
         class: 'field-photo-button' + (photo?.id === p.id ? ' selected' : ''),
         'aria-label': `Open photo ${index + 1}`,
@@ -636,6 +639,12 @@ class App {
       appendLocalized(details,
         el('div', { class: 'candidate' },
           el('div', { class: 'head' }, el('strong', {}, 'Photo')),
+          ...(photo.importInfo ? [el('div', { class: 'photo-import-info' },
+            el('div', { class: 'row' }, `${t('Selected file')}: ${photo.importInfo.fileName}`),
+            el('div', { class: 'row' }, `${t('File size')}: ${photo.importInfo.fileSize.toLocaleString()} ${t('bytes')}`),
+            el('div', { class: 'row' }, `${t('Selection method')}: ${photo.importInfo.selectionMethod === 'file-system-access' ? 'File System Access API' : t('Standard file input')}`),
+            el('div', { class: 'row' }, photo.importInfo.exifGpsRead ? 'EXIF GPS: read successfully' : 'EXIF GPS: not found in selected file')
+          )] : []),
           ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
           el('div', { class: 'row' }, `Captured: ${new Date(photo.timestamp).toLocaleString()} (${photo.timestampSource ?? 'unknown time source'})`),
           el('div', { class: 'row' }, photo.cameraPosition
@@ -749,7 +758,7 @@ class App {
     if (file) await this.onPhotoFile(file);
   }
 
-  private async onPhotoFile(file: File): Promise<void> {
+  private async onPhotoFile(file: File, selectionMethod: 'file-system-access' | 'file-input' = 'file-input'): Promise<void> {
     const s = this.survey;
     if (!s) return;
     if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?)$/i.test(file.name)) {
@@ -773,6 +782,7 @@ class App {
       const photo = await capturePhoto({
         surveyId: s.id,
         file,
+        selectionMethod,
         track: s.gpsSamples,
         captureFix,
         // Issue #3 blocker 1: a normalized reading WITH QUALITY replaces the
@@ -785,6 +795,8 @@ class App {
       });
       this.pickerLaunchTs = undefined;
       s.photos.push(photo);
+      this.selectedFieldPhotoId = photo.id;
+      this.selectedFieldCandidateId = null;
       this.mapView.setPhotos(s.photos);
       if (this.mode === 'survey' && this.survey?.id === s.id) await this.renderFieldInspector();
       if (photo.gps) this.mapView.map.jumpTo({ center: [photo.gps.lon, photo.gps.lat], zoom: 18 });
