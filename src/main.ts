@@ -1242,7 +1242,7 @@ class App {
       type: 'text',
       id: 'openai-model',
       class: 'note-input',
-      placeholder: 'Model (default: gpt-4o-mini)',
+      placeholder: 'Model (default: gpt-6-luna)',
       value: this.openaiModel,
       oninput: () => { this.openaiModel = (modelInput as HTMLInputElement).value; }
     });

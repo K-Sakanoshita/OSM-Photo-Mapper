@@ -39,7 +39,7 @@
     "Capture photo": "写真を撮影",
     "📷 OS camera": "📷 端末のカメラ",
     "Proxy token (optional)": "プロキシトークン（任意）",
-    "Model (default: gpt-4o-mini)": "モデル（既定：gpt-4o-mini）",
+    "Model (default: gpt-6-luna)": "モデル（既定：gpt-6-luna）",
     "Proxy endpoint": "プロキシエンドポイント",
     "Proxy token": "プロキシトークン",
     "Forget / Clear proxy settings": "プロキシ設定を削除",

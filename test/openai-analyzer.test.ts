@@ -234,7 +234,7 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
       input: unknown[];
       text: { format: { type: string; name: string; schema: unknown; strict?: unknown } };
     };
-    expect(body.model).toBe('gpt-4o-mini');
+    expect(body.model).toBe('gpt-6-luna');
     // The first pass sees only broad groups, never the subtype catalog.
     expect(body.instructions).toContain('- playground (Playground equipment and facilities)');
     expect(body.instructions).toContain('- shop (Retail shops)');

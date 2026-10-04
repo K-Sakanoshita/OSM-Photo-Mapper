@@ -48,7 +48,7 @@ export interface OpenAIVisionConfig {
   /** (proxy mode) Optional bearer token authenticating the browser
    *  against the proxy. In-memory only. */
   proxyAuth?: string;
-  /** Vision-capable chat model. Default: 'gpt-4o-mini'. */
+  /** Vision-capable chat model. Default: 'gpt-6-luna'. */
   model?: string;
   /** Request timeout so one stuck request cannot hang the batch.
    *  Default: 60000 ms. */
@@ -59,7 +59,7 @@ export interface OpenAIVisionConfig {
   extraInstructions?: string;
 }
 
-const DEFAULT_MODEL = 'gpt-4o-mini';
+const DEFAULT_MODEL = 'gpt-6-luna';
 /** Default endpoint for direct mode (OpenAI Responses API). */
 const DEFAULT_DIRECT_ENDPOINT = 'https://api.openai.com/v1/responses';
 /** Default request timeout. */
