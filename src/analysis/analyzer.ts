@@ -6,7 +6,7 @@ import type { BBox, Photo } from '../types';
  * The architecture is deliberately split so that NO provider duplicates the
  * candidate/position business logic:
  *
- *   ImageObservationAnalyzer          (per provider: mock, OpenAI, …)
+ *   ImageObservationAnalyzer          (OpenAI vision)
  *     photo -> VisualObservation[]          raw VISUAL evidence only
  *                    |
  *                    v
@@ -103,9 +103,8 @@ export interface AnalysisContext {
 }
 
 /**
- * The provider-facing contract. Implementations: MockAnalyzer
- * (deterministic test/demo stand-in), OpenAIVisionAnalyzer (BYOK remote
- * vision API). Providers must not duplicate pipeline business logic.
+ * The provider-facing contract. Implementation: OpenAIVisionAnalyzer
+ * (BYOK remote vision API). Providers must not duplicate pipeline business logic.
  */
 export interface ImageObservationAnalyzer {
   /** Human-readable provider name (shown in UI / diagnostics). */

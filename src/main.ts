@@ -16,7 +16,6 @@ import {
   type OneShotFix
 } from './capture/camera-position';
 import { surveyDb } from './db/survey-db';
-import { MockAnalyzer } from './analysis/mock-analyzer';
 import { SurveyAnalysisPipeline } from './analysis/pipeline';
 import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
 import { clearProxySettings, loadProxySettings, saveProxySettings } from './analysis/proxy-settings';
@@ -158,7 +157,6 @@ class App {
   private undoButton: HTMLButtonElement;
 
   /** Issue #2: batch analysis state.
-   *  analyzerKind: which ImageObservationAnalyzer runs the batch.
    *  Issue #12: openaiMode selects the transport. 'proxy' is the
    *  RECOMMENDED production path (the OpenAI key lives on the proxy,
    *  never in the browser). 'direct' is EXPERIMENTAL / developer-only:
@@ -167,7 +165,6 @@ class App {
    *  request to api.openai.com.
    *  analysisStatuses/analysisProgress: live batch progress + per-photo
    *  errors (partial failure is visible and retryable). */
-  private analyzerKind: 'mock' | 'openai' = 'openai';
   private openaiMode: 'proxy' | 'direct' = 'proxy';
   private openaiKey = '';
   private openaiProxyEndpoint = 'https://osm-photo-mapper-proxy.openacrossbase.workers.dev/v1/responses';
@@ -622,7 +619,7 @@ class App {
     const details = el('div', { class: 'field-details' });
     if (candidate) {
       if (candidate.analyzer !== 'openai' && candidate.analyzer !== 'manual') {
-        details.append(el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled'));
+        details.append(el('div', { class: 'demo-banner' }, 'Saved analysis is unverified — re-analyze photos with OpenAI before exporting'));
       }
       details.append(this.buildCandidateCard(candidate, photoByObs, obsById));
     } else if (photo) {
@@ -979,47 +976,44 @@ class App {
   /** Build the configured analyzer (issue #2). Returns null (with a
    *  toast) when misconfigured — the batch does not start. */
   private createAnalyzer(): ImageObservationAnalyzer | null {
-    if (this.analyzerKind === 'openai') {
-      const model = this.openaiModel.trim() || undefined;
-      // Issue #12 (remaining blocker): production builds are
-      // proxy-only. Direct (browser-key) mode is developer-only and
-      // must not be reachable from the public app — the analyzer
-      // constructor also hard-fails on it (defense in depth).
-      if (import.meta.env.PROD && this.openaiMode === 'direct') {
-        this.openaiMode = 'proxy';
-        toast('Direct (browser-key) mode is disabled in this build (issue #12) — use the proxy endpoint');
-        return null;
-      }
-      if (this.openaiMode === 'proxy') {
-        // Recommended production path (issue #12): the browser talks to
-        // the user's proxy; the OpenAI key never touches the browser.
-        const endpoint = this.openaiProxyEndpoint.trim();
-        if (!endpoint) {
-          toast('Set the proxy endpoint to use the OpenAI analyzer (recommended mode)');
-          return null;
-        }
-        return new OpenAIVisionAnalyzer({
-          mode: 'proxy',
-          endpoint,
-          ...(this.openaiProxyAuth.trim() ? { proxyAuth: this.openaiProxyAuth.trim() } : {}),
-          ...(model ? { model } : {})
-        });
-      }
-      // Experimental / developer-only: the user's own key is sent from
-      // the browser to api.openai.com. In-memory for the session only —
-      // this app never stores it (issue #12).
-      const key = this.openaiKey.trim();
-      if (!key) {
-        toast('Enter your OpenAI API key for direct mode — or switch to the recommended proxy mode');
+    const model = this.openaiModel.trim() || undefined;
+    // Issue #12 (remaining blocker): production builds are
+    // proxy-only. Direct (browser-key) mode is developer-only and
+    // must not be reachable from the public app — the analyzer
+    // constructor also hard-fails on it (defense in depth).
+    if (import.meta.env.PROD && this.openaiMode === 'direct') {
+      this.openaiMode = 'proxy';
+      toast('Direct (browser-key) mode is disabled in this build (issue #12) — use the proxy endpoint');
+      return null;
+    }
+    if (this.openaiMode === 'proxy') {
+      // Recommended production path (issue #12): the browser talks to
+      // the user's proxy; the OpenAI key never touches the browser.
+      const endpoint = this.openaiProxyEndpoint.trim();
+      if (!endpoint) {
+        toast('Set the proxy endpoint to use the OpenAI analyzer (recommended mode)');
         return null;
       }
       return new OpenAIVisionAnalyzer({
-        mode: 'direct',
-        apiKey: key,
+        mode: 'proxy',
+        endpoint,
+        ...(this.openaiProxyAuth.trim() ? { proxyAuth: this.openaiProxyAuth.trim() } : {}),
         ...(model ? { model } : {})
       });
     }
-    return new MockAnalyzer();
+    // Experimental / developer-only: the user's own key is sent from
+    // the browser to api.openai.com. In-memory for the session only —
+    // this app never stores it (issue #12).
+    const key = this.openaiKey.trim();
+    if (!key) {
+      toast('Enter your OpenAI API key for direct mode — or switch to the recommended proxy mode');
+      return null;
+    }
+    return new OpenAIVisionAnalyzer({
+      mode: 'direct',
+      apiKey: key,
+      ...(model ? { model } : {})
+    });
   }
 
   /** Run the shared pipeline over the batch (issue #2). Per-photo
@@ -1066,7 +1060,7 @@ class App {
       const model = analyzer instanceof OpenAIVisionAnalyzer ? analyzer.modelName : undefined;
       for (const obs of result.observations) {
         if (!photoIds || photoIds.includes(obs.photoId)) {
-          obs.analyzer = analyzer.name === 'openai' ? 'openai' : 'mock';
+          obs.analyzer = 'openai';
           obs.analyzerModel = model;
         }
       }
@@ -1348,45 +1342,6 @@ class App {
       openaiPanel.dataset.transport = this.openaiMode;
     }
 
-    const kindMock = el(
-      'label',
-      { class: 'radio-row' },
-      el(
-        'input',
-        {
-          type: 'radio',
-          name: 'analyzer',
-          value: 'mock',
-          checked: this.analyzerKind === 'mock',
-          onchange: () => {
-            this.analyzerKind = 'mock';
-            this.content.dataset.analyzer = 'mock';
-            this.updateAnalysisBanner();
-          }
-        }
-      ),
-      ' Mock (offline demo)'
-    );
-    const kindOpenai = el(
-      'label',
-      { class: 'radio-row' },
-      el(
-        'input',
-        {
-          type: 'radio',
-          name: 'analyzer',
-          value: 'openai',
-          checked: this.analyzerKind === 'openai',
-          onchange: () => {
-            this.analyzerKind = 'openai';
-            this.content.dataset.analyzer = 'openai';
-            this.updateAnalysisBanner();
-          }
-        }
-      ),
-      ' OpenAI vision (BYOK / proxy)'
-    );
-
     const progressBox = el('div', { id: 'analysis-progress', class: 'analysis-progress' });
     const resultBox = el('div', { id: 'analysis-result', class: 'analysis-result' });
 
@@ -1394,10 +1349,8 @@ class App {
       el(
         'div',
         { class: 'analysis-screen' },
-        el('div', { id: 'analysis-demo-banner', class: 'demo-banner', hidden: this.analyzerKind !== 'mock' && this.analysisResult?.analyzerName !== 'mock' }, 'MOCK / DEMO RESULT — fabricated detections; export disabled'),
         el('div', { class: 'section-title' }, 'Analyzer'),
-        kindMock,
-        kindOpenai,
+        el('div', {}, 'OpenAI vision (BYOK / proxy)'),
         openaiPanel,
         el('div', { class: 'section-title' }, `${s.photos.length} photo(s)`),
         el('div', { class: 'section-title' }, 'Batch progress'),
@@ -1405,7 +1358,7 @@ class App {
         resultBox
       )
     );
-    this.content.dataset.analyzer = this.analyzerKind;
+    this.content.dataset.analyzer = 'openai';
     this.updateProxyStorageNote();
 
     this.bottombar.replaceChildren(
@@ -1420,11 +1373,6 @@ class App {
 
     this.updateAnalysisProgressDom();
     this.updateAnalysisResultDom();
-  }
-
-  private updateAnalysisBanner(): void {
-    const banner = this.content.querySelector<HTMLElement>('#analysis-demo-banner');
-    if (banner) banner.hidden = this.analyzerKind !== 'mock' && this.analysisResult?.analyzerName !== 'mock';
   }
 
   /** Live batch progress (issue #2): in-place DOM update so input focus
@@ -1460,7 +1408,6 @@ class App {
     if (btn) btn.disabled = this.analyzing;
 
     const result = this.analysisResult;
-    this.updateAnalysisBanner();
     if (this.analyzing || !result) {
       box.replaceChildren();
       return;
@@ -1468,7 +1415,7 @@ class App {
     const failed = result.photoStatuses?.filter((st) => st.status === 'error') ?? [];
     const lines: Node[] = [
       el('div', { class: 'analysis-summary' },
-        `${result.candidates.length} candidate(s) from ${result.observations.length} observation(s) — analyzer: ${result.analyzerName ?? this.analyzerKind}`)
+        `${result.candidates.length} candidate(s) from ${result.observations.length} observation(s) — analyzer: ${result.analyzerName ?? 'openai'}`)
     ];
     if (failed.length > 0) {
       lines.push(
@@ -1527,7 +1474,7 @@ class App {
         el('span', {}, this.placingExistingCandidateId ? 'Tap the map to place the selected candidate.' : this.placingCandidate ? 'Tap the map where the object is located.' : 'Add an object manually if analysis found no candidate.')
       ),
       ...(s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual')
-        ? [el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled')]
+        ? [el('div', { class: 'demo-banner' }, 'Saved analysis is unverified — re-analyze photos with OpenAI before exporting')]
         : []),
       ...(s.candidates.length === 0 ? [el('div', { class: 'empty-hint' }, 'No candidates yet. Add a pin on the map, or capture photos and press Map photos.')] : []),
       el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
@@ -2284,7 +2231,7 @@ class App {
     if (!s) return;
     this.setMode('upload', 'Review upload');
     if (s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual')) {
-      this.content.replaceChildren(el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled'));
+      this.content.replaceChildren(el('div', { class: 'demo-banner' }, 'Saved analysis is unverified — re-analyze photos with OpenAI before exporting'));
       this.bottombar.replaceChildren(el('button', { class: 'btn', onclick: () => { this.mode = 'review'; this.render(); } }, '← Review'));
       return;
     }

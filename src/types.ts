@@ -159,7 +159,8 @@ export interface Observation {
   id: string;
   photoId: string;
   surveyId: string;
-  /** Analyzer that produced this visual evidence. Absent on legacy data. */
+  /** Analyzer that produced this visual evidence. 'mock' is retained only
+   * for reading legacy saved data, which cannot be exported. */
   analyzer?: 'mock' | 'openai';
   analyzerModel?: string;
   /** Detected feature class id (see feature-classes). */
@@ -283,7 +284,7 @@ export const POSITION_QUALITY_LABEL: Record<PositionQuality, string> = {
 export interface FeatureCandidate {
   id: string;
   surveyId: string;
-  /** Persisted source of every contributing observation. */
+  /** Persisted source of every contributing observation. 'mock' is legacy data only. */
   analyzer?: 'mock' | 'openai' | 'mixed' | 'manual';
   analyzerModel?: string;
   featureType: string;

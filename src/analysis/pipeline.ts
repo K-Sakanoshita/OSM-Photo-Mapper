@@ -384,7 +384,7 @@ function allowedValuesFor(
 }
 
 /* ------------------------------------------------------------------ */
-/* Grouping + candidate building (moved out of MockAnalyzer, issue #2) */
+/* Grouping + candidate building */
 /* ------------------------------------------------------------------ */
 
 /**

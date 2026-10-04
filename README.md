@@ -43,8 +43,8 @@
 - Survey 画面上での候補ピン選択、写真確認、タグ編集
 - 写真点の選択と元写真確認
 - タッチ操作による候補ピン移動
-- Mock / OpenAI 解析結果の由来表示
-- Mock 結果のエクスポート禁止
+- OpenAI 解析結果の由来表示
+- 検証できない過去の解析結果のエクスポート禁止
 - OSM オブジェクトの最新状態を取得してから `modify` を生成
 - `osmChange` 出力（editor-import only）
 
@@ -358,7 +358,7 @@ Review 画面では AI の最終候補だけでなく、判断材料も表示し
 - OSM mapping
 - warnings
 
-Mock Analyzer を利用した場合は **MOCK / DEMO RESULT** と明示し、Mock 由来の candidate は export できません。
+解析は OpenAI のみです。過去に保存したデモ解析結果はエクスポートできません。OpenAI で写真を再解析してください。
 
 ---
 
@@ -744,7 +744,7 @@ OSM-Photo-Mapper/
 - camera GPS を対象物の位置として代用しない
 - 同一物体 merge は conservative に行う
 - 既存 OSM オブジェクトの変更時は必ず最新状態を確認する
-- Mock / Demo データを本物の AI 判定と混同させない
+- 検証できない過去の解析結果をエクスポートしない
 - 最終判断は常に mapper が行う
 
 ---
