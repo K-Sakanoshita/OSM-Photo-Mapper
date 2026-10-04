@@ -2,6 +2,7 @@ import maplibregl from 'maplibre-gl';
 import type { FeatureCandidate, GpsSample, Photo, Survey } from '../types';
 import { iconForTags, iconUrl } from './tag-icon';
 import { appAssetUrl, t } from '../i18n';
+import { BasemapControl } from './basemap-control';
 
 /**
  * MapLibre GL view for the survey map.
@@ -46,19 +47,22 @@ export class MapView {
         'AttributionControl.ToggleAttribution': t('Toggle attribution'),
         'Popup.Close': t('Close popup')
       },
-      style: appAssetUrl('tiles/osmfj_poi.json'),
+      style: appAssetUrl('tiles/osm_standard.json'),
+      attributionControl: false,
       center: [139.767, 35.681],
       zoom: 15
     });
 
+    this.map.addControl(new maplibregl.AttributionControl({ compact: false }));
     this.map.addControl(new maplibregl.NavigationControl());
+    this.map.addControl(new BasemapControl());
     this.map.addControl(new maplibregl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true
     }));
     this.map.on('click', (e) => this.onMapSelected?.(e.lngLat.lat, e.lngLat.lng));
 
-    this.map.on('load', () => {
+    this.map.on('style.load', () => {
       this.map.addSource(this.trackSourceId, { type: 'geojson', data: this.trackData });
       this.map.addLayer({
         id: this.trackLayerId,
@@ -98,17 +102,18 @@ export class MapView {
         id: 'candidate-icons', type: 'symbol', source: this.candidateSourceId,
         layout: { 'icon-image': ['get', 'icon'], 'icon-size': 1, 'icon-allow-overlap': true, 'icon-ignore-placement': true }
       });
-      this.map.on('styleimagemissing', (event) => void this.loadIcon(event.id));
       (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource).setData(this.candidateData);
       void this.loadCandidateIcons();
 
-      this.enableDragging();
-      this.map.on('click', this.photoLayerId, (e) => {
-        // Candidate and camera markers can overlap; the object pin wins.
-        if (this.map.queryRenderedFeatures(e.point, { layers: [this.candidateHitLayerId] }).length > 0) return;
-        const id = e.features?.[0]?.properties?.id as string | undefined;
-        if (id) this.onPhotoSelected?.(id);
-      });
+    });
+    this.map.on('styleimagemissing', (event) => void this.loadIcon(event.id));
+    this.enableDragging();
+    this.map.on('click', this.photoLayerId, (e) => {
+      if (!this.map.getLayer(this.candidateHitLayerId)) return;
+      // Candidate and camera markers can overlap; the object pin wins.
+      if (this.map.queryRenderedFeatures(e.point, { layers: [this.candidateHitLayerId] }).length > 0) return;
+      const id = e.features?.[0]?.properties?.id as string | undefined;
+      if (id) this.onPhotoSelected?.(id);
     });
   }
 

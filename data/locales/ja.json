@@ -8,6 +8,8 @@
     "Captured": "撮影日時",
     "No candidates. Your photos are shown below. Analyze again or add a pin manually.": "候補がありません。撮影済みの写真は下の一覧から確認できます。再解析するか、手動でピンを追加してください。",
     "Analyze photos again": "写真を再解析",
+    "Switch map to OSMFJ": "地図をOSMFJに切り替え",
+    "Switch map to OSM Standard": "地図をOSM標準に切り替え",
     "Back": "戻る",
     "Undo": "元に戻す",
     "Undo pin move": "ピン移動を元に戻す",
