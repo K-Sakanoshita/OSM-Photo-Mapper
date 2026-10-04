@@ -639,12 +639,7 @@ class App {
       appendLocalized(details,
         el('div', { class: 'candidate' },
           el('div', { class: 'head' }, el('strong', {}, 'Photo')),
-          ...(photo.importInfo ? [el('div', { class: 'photo-import-info' },
-            el('div', { class: 'row' }, `${t('Selected file')}: ${photo.importInfo.fileName}`),
-            el('div', { class: 'row' }, `${t('File size')}: ${photo.importInfo.fileSize.toLocaleString()} ${t('bytes')}`),
-            el('div', { class: 'row' }, `${t('Selection method')}: ${photo.importInfo.selectionMethod === 'file-system-access' ? 'File System Access API' : t('Standard file input')}`),
-            el('div', { class: 'row' }, photo.importInfo.exifGpsRead ? 'EXIF GPS: read successfully' : 'EXIF GPS: not found in selected file')
-          )] : []),
+          this.buildPhotoImportInfo(photo),
           ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
           el('div', { class: 'row' }, `Captured: ${new Date(photo.timestamp).toLocaleString()} (${photo.timestampSource ?? 'unknown time source'})`),
           el('div', { class: 'row' }, photo.cameraPosition
@@ -1515,6 +1510,22 @@ class App {
     return map;
   }
 
+  private buildPhotoImportInfo(photo: Photo): HTMLElement {
+    const info = photo.importInfo;
+    return el('div', { class: 'photo-import-info' },
+      el('b', {}, 'Photo import details'),
+      el('div', { class: 'row' }, supportsPhotoFilePicker()
+        ? 'Photo picker: File System Access API'
+        : 'Photo picker: standard file input (File System Access API unavailable)'),
+      ...(info ? [
+        el('div', { class: 'row' }, `${t('Selected file')}: ${info.fileName}`),
+        el('div', { class: 'row' }, `${t('File size')}: ${info.fileSize.toLocaleString()} ${t('bytes')}`),
+        el('div', { class: 'row' }, `${t('Selection method')}: ${info.selectionMethod === 'file-system-access' ? 'File System Access API' : t('Standard file input')}`),
+        el('div', { class: 'row' }, info.exifGpsRead ? 'EXIF GPS: read successfully' : 'EXIF GPS: not found in selected file')
+      ] : [el('div', { class: 'row' }, 'Import details unavailable for this saved photo. Re-import the original photo to check the selection method.')])
+    );
+  }
+
   private buildCandidateCard(
     c: FeatureCandidate,
     photoByObs: Map<string, Photo | undefined>,
@@ -1561,6 +1572,13 @@ class App {
       appendLocalized(card, el('div', { class: 'row' }, 'Feature type: ', classSelect));
     }
     if (c.analyzer !== 'manual') appendLocalized(card, el('div', { class: 'row' }, `Contributing observations: ${evidence.length} from ${new Set(evidence.map((o) => o.photoId)).size} photo(s)`));
+    const sourcePhotos = [...new Map(evidence.map((obs) => {
+      const photo = photoByObs.get(obs.id);
+      return [photo?.id, photo] as const;
+    }).filter((entry): entry is readonly [string, Photo] => !!entry[0] && !!entry[1])).values()];
+    if (c.analyzer !== 'manual' && !sourcePhotos.length && this.survey?.photos.length === 1) sourcePhotos.push(this.survey.photos[0]);
+    for (const photo of sourcePhotos) appendLocalized(card, this.buildPhotoImportInfo(photo));
+
     for (const obs of evidence) {
       const sourceImage = photoByObs.get(obs.id)?.image;
       if (sourceImage) {
