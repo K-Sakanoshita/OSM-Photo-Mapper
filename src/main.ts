@@ -1547,6 +1547,7 @@ class App {
       el('div', { class: 'row' }, `${t('Cam heading')}: ${heading
         ? `${heading.bearing.toFixed(0)}° · ${t(heading.source)} · ±${heading.uncertaintyDeg}° · ${t(`age ${Math.round(heading.ageMs / 1000)} s`)}${heading.detail ? ` · ${t(heading.detail)}` : ''}`
         : t(photo.headingNote ?? 'No orientation reading')}`),
+      ...(photo.movementHeading != null ? [el('div', { class: 'row' }, `${t('Movement')}: ${t(`hdg ${photo.movementHeading.toFixed(0)}° (direction of travel — NOT a camera bearing)`)}`)] : []),
       el('div', { class: 'row' }, `${t('Note')}: ${photo.note || t('none')}`),
       this.buildPhotoImportInfo(photo)
     );
@@ -1740,23 +1741,6 @@ class App {
     appendLocalized(card, posRow);
     appendLocalized(card, el('div', { class: 'row' }, `OSM mapping: ${Object.entries(c.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'unresolved'}`));
 
-    // Issue #10: the camera position and its provenance must be visible to
-    // the reviewer — it is evidence for the object's location, and a
-    // missing/stale fix must be an explicit, visible fact.
-    const cam = c.observationIds
-      .map((id) => photoByObs.get(id)?.cameraPosition)
-      .find((v) => v != null)
-      ?? (evidence.length === 0 && this.survey?.photos.length === 1 ? this.survey.photos[0].cameraPosition : undefined);
-    if (c.analyzer !== 'manual') appendLocalized(card,
-      el(
-        'div',
-        { class: 'row cam-row' },
-        el('b', {}, 'Camera'),
-        cam
-          ? ` ${t(describeCameraPosition(cam))} @ ${cam.lat.toFixed(5)}, ${cam.lon.toFixed(5)}`
-          : ' no GPS — position needs manual placement.'
-      )
-    );
     const missingGpsPhotos = [...new Map(evidence.map((obs) => {
       const photo = photoByObs.get(obs.id);
       return [photo?.id, photo] as const;
@@ -1789,46 +1773,6 @@ class App {
     }
     if (c.analyzer !== 'manual' && evidence.length === 0 && this.survey?.photos.length === 1) {
       appendLocalized(card, el('div', { class: 'row' }, 'Saved detection details are unavailable. Re-run photo analysis to estimate the object position, or place its pin on the map.'));
-    }
-
-    // Issue #3: camera-bearing evidence. Show the bearing WITH its
-    // provenance (source, uncertainty, age), or an explicit, visible
-    // reason why no camera bearing is available (stale or post-return
-    // reading, no sensor, relative-only orientation). The movement
-    // heading (direction of travel) is shown separately and labeled as
-    // NOT a camera bearing.
-    const hdgPhoto = c.observationIds
-      .map((id) => photoByObs.get(id))
-      .find((p) => p != null && (p.cameraHeading != null || p.headingNote != null));
-    if (hdgPhoto?.cameraHeading) {
-      const ch = hdgPhoto.cameraHeading;
-      appendLocalized(card,
-        el(
-          'div',
-          { class: 'row heading-row' },
-          el('b', {}, 'Cam heading'),
-          ` ${ch.bearing.toFixed(0)}° · ${t(ch.source)} · ±${ch.uncertaintyDeg}° · ${t(`age ${Math.round(ch.ageMs / 1000)} s`)}${ch.detail ? ` · ${t(ch.detail)}` : ''}`
-        )
-      );
-    } else if (hdgPhoto?.headingNote) {
-      appendLocalized(card,
-        el(
-          'div',
-          { class: 'row heading-row heading-missing' },
-          el('b', {}, 'Cam heading'),
-          ` ${t(`none — ${hdgPhoto.headingNote}`)}`
-        )
-      );
-    }
-    if (hdgPhoto?.movementHeading != null) {
-      appendLocalized(card,
-        el(
-          'div',
-          { class: 'row heading-row movement-row' },
-          el('b', {}, 'Movement'),
-          ` hdg ${hdgPhoto.movementHeading.toFixed(0)}° (direction of travel — NOT a camera bearing)`
-        )
-      );
     }
 
     // Issue #8: position solution provenance (estimate → refined → snapped).
