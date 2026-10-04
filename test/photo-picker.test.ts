@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { pickPhotoFile } from '../src/capture/photo-picker';
+import { pickPhotoFile, pickPhotoFiles } from '../src/capture/photo-picker';
 import { exifGpsFromData, readExif, photoFileHash } from '../src/capture/photo';
 
 describe('original photo picker', () => {
@@ -39,5 +39,30 @@ describe('original photo picker', () => {
     await expect(pickPhotoFile(vi.fn(), {
       showOpenFilePicker: async () => [{ getFile: async () => { throw new Error('Unreadable file'); } }]
     })).rejects.toThrow('Unreadable file');
+  });
+});
+
+
+describe('multiple original photos', () => {
+  it('opens once with multiple selection and returns every original in order', async () => {
+    const files = [new File(['first'], 'first.jpg'), new File(['second'], 'second.jpg')];
+    const picker = vi.fn(async () => files.map(file => ({ getFile: async () => file })));
+    const fallback = vi.fn();
+    const selection = pickPhotoFiles(fallback, { showOpenFilePicker: picker });
+    expect(picker).toHaveBeenCalledWith({ multiple: true, startIn: 'pictures' });
+    const selected = await selection;
+    expect(selected).toEqual(files);
+    expect(selected?.[0]).toBe(files[0]);
+    expect(selected?.[1]).toBe(files[1]);
+    expect(await selected?.[1].text()).toBe('second');
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('supports fallback and cancellation without reopening the picker', async () => {
+    const fallback = vi.fn();
+    expect(await pickPhotoFiles(fallback, {})).toBeUndefined();
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(await pickPhotoFiles(fallback, { showOpenFilePicker: async () => { throw new DOMException('Cancelled', 'AbortError'); } })).toBeNull();
+    expect(fallback).toHaveBeenCalledTimes(1);
   });
 });

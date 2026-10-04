@@ -14,7 +14,7 @@ import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
 import { capturePhoto, restorePhotoGps } from './capture/photo';
-import { pickPhotoFile, supportsPhotoFilePicker } from './capture/photo-picker';
+import { pickPhotoFile, pickPhotoFiles, supportsPhotoFilePicker } from './capture/photo-picker';
 import { InAppCamera } from './capture/inapp-camera';
 import {
   requestOneShotFix,
@@ -471,6 +471,7 @@ class App {
 
     const photoInput = el('input', {
       type: 'file',
+      multiple: true,
       // Read selected files directly; mobile providers may redact EXIF GPS.
       accept: '*/*',
       style: 'display:none',
@@ -483,12 +484,12 @@ class App {
         class: 'btn accent',
         title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.',
         onclick: () => {
-          const selection = pickPhotoFile(() => photoInput.click());
+          const selection = pickPhotoFiles(() => photoInput.click());
           this.pendingFix = null;
           this.pickerLaunchTs = undefined;
-          void selection.then((file) => {
-            if (file && this.survey?.id === s.id && this.mode !== 'list') return this.onPhotoFile(file, 'file-system-access');
-            if (file === null) {
+          void selection.then((files) => {
+            if (files && this.survey?.id === s.id && this.mode !== 'list') return this.onPhotoFiles(files, 'file-system-access');
+            if (files === null) {
               this.pendingFix = null;
               this.pickerLaunchTs = undefined;
             }
@@ -730,9 +731,17 @@ class App {
   }
 
   private async onPhotoTaken(input: HTMLInputElement): Promise<void> {
-    const file = input.files?.[0];
+    const files = Array.from(input.files ?? []);
     input.value = '';
-    if (file) await this.onPhotoFile(file);
+    await this.onPhotoFiles(files);
+  }
+
+  private async onPhotoFiles(files: File[], selectionMethod: 'file-system-access' | 'file-input' = 'file-input'): Promise<void> {
+    const survey = this.survey;
+    for (const file of files) {
+      if (!survey || this.survey !== survey || this.mode === 'list') break;
+      await this.onPhotoFile(file, selectionMethod);
+    }
   }
 
   private async onPhotoFile(file: File, selectionMethod: 'file-system-access' | 'file-input' = 'file-input'): Promise<void> {
