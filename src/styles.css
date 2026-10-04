@@ -680,3 +680,6 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
 .photo-details-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .photo-details-header h2 { margin: 0; font-size: 18px; }
 .photo-details-dialog .row { margin: 8px 0; overflow-wrap: anywhere; }
+
+.photo-gallery-items { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px; }
+#camera-photos { width: 100%; }

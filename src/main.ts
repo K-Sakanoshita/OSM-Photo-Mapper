@@ -521,6 +521,7 @@ class App {
         // Issue #2: go to the analysis screen (analyzer selection, BYOK
         // config, batch progress/retry) BEFORE any analysis runs.
         onclick: () => {
+          this.stopInAppCamera();
           this.mode = 'analysis';
           this.render();
         }
@@ -913,6 +914,7 @@ class App {
         class: 'btn primary',
         disabled: s.photos.length === 0,
         onclick: () => {
+          this.stopInAppCamera();
           this.mode = 'analysis';
           this.render();
         }
@@ -923,7 +925,8 @@ class App {
     this.content.replaceChildren(
       video,
       el('div', { class: 'camera-status' }, el('div', {}, orientLine), el('div', {}, gpsLine)),
-      shutterBtn
+      shutterBtn,
+      el('div', { id: 'camera-photos' }, this.buildPhotoGallery(s.photos))
     );
     this.bottombar.replaceChildren(osCamBtn, mapBtn, photoInput);
   }
@@ -959,6 +962,9 @@ class App {
         note: undefined
       });
       s.photos.push(photo);
+      this.selectedFieldPhotoId = photo.id;
+      this.selectedFieldCandidateId = null;
+      this.content.querySelector('#camera-photos')?.replaceChildren(this.buildPhotoGallery(s.photos));
       this.mapView.setPhotos(s.photos);
       toast(this.describePhotoCaptured(photo, s.photos.length));
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
@@ -1359,7 +1365,7 @@ class App {
         el('div', { class: 'section-title' }, 'Analyzer'),
         el('div', {}, 'OpenAI vision (BYOK / proxy)'),
         openaiPanel,
-        el('div', { class: 'section-title' }, `${s.photos.length} photo(s)`),
+        this.buildPhotoGallery(s.photos),
         el('div', { class: 'section-title' }, 'Batch progress'),
         progressBox,
         resultBox
@@ -1483,7 +1489,10 @@ class App {
       ...(s.candidates.some((c) => c.analyzer !== 'openai' && c.analyzer !== 'manual')
         ? [el('div', { class: 'demo-banner' }, 'Saved analysis is unverified — re-analyze photos with OpenAI before exporting')]
         : []),
-      ...(s.candidates.length === 0 ? [el('div', { class: 'empty-hint' }, 'No candidates yet. Add a pin on the map, or capture photos and press Map photos.')] : []),
+      ...(s.candidates.length === 0 ? [el('div', { class: 'empty-hint' }, s.photos.length > 0
+        ? 'No candidates. Your photos are shown below. Analyze again or add a pin manually.'
+        : 'No candidates yet. Add a pin on the map, or capture photos and press Map photos.')] : []),
+      ...(s.photos.length > 0 ? [this.buildPhotoGallery(s.photos), el('button', { class: 'btn', onclick: () => { this.mode = 'analysis'; this.render(); } }, 'Analyze photos again')] : []),
       el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
       ...cards
     );
@@ -1500,6 +1509,19 @@ class App {
       map.set(obs.id, s.photos.find((p) => p.id === obs.photoId));
     }
     return map;
+  }
+
+  private buildPhotoGallery(photos: Photo[]): HTMLElement {
+    return el('div', { class: 'photo-gallery' },
+      el('div', { class: 'section-title' }, `Photos (${photos.length})`),
+      el('div', { class: 'photo-gallery-items' }, ...photos.map((photo) =>
+        el('div', { class: 'photo-frame photo-thumbnail' },
+          el('button', { class: 'field-photo-button', 'aria-label': 'Photo details', onclick: () => this.showPhotoDetails(photo) },
+            photo.image ? el('img', { src: photo.image, alt: 'Captured source photo' }) : 'Photo'),
+          this.photoDetailsButton(photo, true)
+        )
+      ))
+    );
   }
 
   private photoDetailsButton(photo: Photo, compact = false): HTMLButtonElement {
