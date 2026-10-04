@@ -44,6 +44,7 @@
  * suggestions.
  */
 import type { Observation } from '../types';
+import { POI_ENTRIES, categoryForEntry } from './poi-catalog';
 
 export type GeometryPreference = 'node' | 'area' | 'either' | 'existing-only';
 
@@ -88,7 +89,7 @@ export interface FeatureClass {
   mappings?: OsmMapping[];
 }
 
-export const FEATURE_CLASSES: FeatureClass[] = [
+const BASE_FEATURE_CLASSES: FeatureClass[] = [
   // ---- business ----
   {
     id: 'vending_machine',
@@ -333,7 +334,7 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     // analysis or from the reviewer (commonValues picker).
     requiredTags: {},
     suggestedTags: {},
-    commonValues: { playground: ['slide', 'swing', 'roundabout', 'sandbox', 'other'] },
+    commonValues: { playground: POI_ENTRIES.filter((entry) => entry.featureType === 'playground').map((entry) => entry.tags.playground) },
     visualAttributeKeys: ['playground'],
     visualHint: 'Identify each complete piece of equipment. A swing frame with multiple seats is one swing.',
     hint: 'Single piece of playground equipment; the type must be confirmed, not guessed',
@@ -383,6 +384,23 @@ export const FEATURE_CLASSES: FeatureClass[] = [
     autoTag: true,
     geometryPreference: 'either'
   }
+];
+
+/** Additional POI classes are data-driven. Existing hand-reviewed classes
+ * retain their special review/geometry policy above. */
+export const FEATURE_CLASSES: FeatureClass[] = [
+  ...BASE_FEATURE_CLASSES,
+  ...POI_ENTRIES.filter((entry) => !entry.featureType && !BASE_FEATURE_CLASSES.some((cls) => cls.id === entry.id))
+    .map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      category: categoryForEntry(entry.id)?.id ?? 'other',
+      requiredTags: entry.tags,
+      suggestedTags: {},
+      hint: `OSM POI preset: ${entry.label}; verify the photo and position before export`,
+      autoTag: true,
+      geometryPreference: entry.geometry ?? 'node'
+    }))
 ];
 
 const byId = new Map(FEATURE_CLASSES.map((c) => [c.id, c]));

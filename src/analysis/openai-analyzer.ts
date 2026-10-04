@@ -1,6 +1,7 @@
 import type { Photo } from '../types';
 import type { AnalysisContext, ImageObservationAnalyzer, VisualObservation } from './analyzer';
 import { UNKNOWN_FEATURE_TYPE, validateVisualObservations } from './analyzer';
+import { POI_CATEGORIES, getPoiCategory, getPoiEntry, matchPoiKeyword, type PoiEntry } from './poi-catalog';
 
 /**
  * BYOK (bring-your-own-key) OpenAI vision analyzer (issues #2, #12).
@@ -63,6 +64,7 @@ const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_DIRECT_ENDPOINT = 'https://api.openai.com/v1/responses';
 /** Default request timeout. */
 const DEFAULT_TIMEOUT_MS = 60_000;
+const MIN_POI_RESOLUTION_CONFIDENCE = 0.7;
 
 export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
   readonly name = 'openai';
@@ -114,7 +116,44 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       throw new Error('Photo has no image data to analyze');
     }
 
-    const body = this.buildRequest(photo, context);
+    const first = await this.requestObservations(this.buildRequest(photo));
+    const known = new Set(context.featureClasses.map((c) => c.id));
+    const resolved = first.observations.map((observation) => resolvePrimary(observation, known));
+    const unresolved = resolved.flatMap((item, index) => item.resolved ? [] : [{ index, category: item.category, observation: first.observations[index] }]);
+    if (unresolved.length === 0 || !first.responseId) return resolved.map((item) => item.observation);
+
+    // One text-only follow-up for all unresolved objects. A failed or stale
+    // continuation cannot erase the first pass's visual observations.
+    try {
+      const second = await this.requestObservations(this.buildRefinementRequest(first.responseId, unresolved));
+      const matched = new Set<number>();
+      for (const candidate of second.observations) {
+        const possible = unresolved
+          .filter((item) => !matched.has(item.index) && getPoiCategory(item.category)?.entries.some((entry) => entry.id === candidate.featureType))
+          .map((item) => ({ item, overlap: boxOverlap(item.observation.bbox, candidate.bbox) }))
+          .sort((a, b) => b.overlap - a.overlap);
+        const original = possible[0]?.overlap >= 0.7
+          && (possible.length < 2 || possible[0].overlap - possible[1].overlap > 0.1)
+          ? possible[0].item : undefined;
+        if (!original) continue;
+        const category = getPoiCategory(original.category);
+        const entry = category?.entries.find((item) => item.id === candidate.featureType);
+        if (!entry || candidate.detectionConfidence < MIN_POI_RESOLUTION_CONFIDENCE
+          || original.observation.detectionConfidence < MIN_POI_RESOLUTION_CONFIDENCE) continue;
+        matched.add(original.index);
+        resolved[original.index] = {
+          resolved: true,
+          category: original.category,
+          observation: observationForEntry(original.observation, entry)
+        };
+      }
+    } catch {
+      // The initial detections remain reviewable, with no guessed OSM tag.
+    }
+    return resolved.map((item) => item.observation);
+  }
+
+  private async requestObservations(body: object): Promise<{ responseId?: string; observations: VisualObservation[] }> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.authToken) headers.authorization = `Bearer ${this.authToken}`;
 
@@ -168,17 +207,10 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       throw new Error('OpenAI API returned malformed JSON');
     }
 
-    // Strict schema validation: unusable items are dropped, OCR stays
-    // untrusted evidence. The closed vocabulary is known here (it is in
-    // the instructions), so any class id outside it is normalized to
-    // 'unknown' — an unrecognized object is never forced into a
-    // supported class. (The pipeline re-checks as defense in depth.)
-    const known = new Set(context.featureClasses.map((c) => c.id));
-    return validateVisualObservations(unpackObservations(parsed)).map((o) =>
-      o.featureType !== UNKNOWN_FEATURE_TYPE && !known.has(o.featureType)
-        ? { ...o, featureType: UNKNOWN_FEATURE_TYPE }
-        : o
-    );
+    return {
+      responseId: typeof json.id === 'string' ? json.id : undefined,
+      observations: validateVisualObservations(unpackObservations(parsed))
+    };
   }
 
   private redactCredential(message: string): string {
@@ -186,40 +218,35 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
   }
 
   /** Build the Responses API request body (issue #12). */
-  private buildRequest(photo: Photo, context: AnalysisContext) {
-    const classList = context.featureClasses
-      .map((c) => {
-        const attributes = c.visualAttributes?.map((attribute) =>
-          `${attribute.key}${attribute.allowedValues?.length ? `: ${attribute.allowedValues.join(' | ')}` : ''}`
-        ).join('; ');
-        return `  - ${c.id} (${c.label})${attributes ? `; visible attributes: ${attributes}` : ''}${c.visualHint ? `; visual hint: ${c.visualHint}` : ''}`;
-      })
+  private buildRequest(photo: Photo) {
+    const categoryList = POI_CATEGORIES
+      .map((category) => `  - ${category.id} (${category.label})`)
       .join('\n');
 
     const instructions = [
       'You detect map-mappable physical features in street-level photos for OpenStreetMap.',
       '',
-      'Supported feature classes (closed vocabulary):',
-      classList,
+      'Broad POI categories (send one category ID as featureType):',
+      categoryList,
       '',
       'Rules:',
       '- Inspect the entire image, including foreground, background, edges, and partly occluded objects. Do not stop after the most prominent object.',
-      `- Report a separate observation for every clearly identifiable supported physical feature, including multiple features of the same class. If an object is not clearly one of the listed classes, use featureType "${UNKNOWN_FEATURE_TYPE}".`,
+      `- Report a separate observation for every clearly identifiable physical POI, including multiple objects in the same category. If no category fits, use featureType "${UNKNOWN_FEATURE_TYPE}".`,
       '- Count complete physical features, not their components: a swing frame with two seats is one swing observation, not two.',
       '- Never invent objects. Zero objects is a correct answer (return an empty array).',
       '- bbox: normalized 0..1 image coordinates {x, y, w, h} of the object.',
-      '- attributes: an array of {key, value} pairs for properties you can SEE. For listed visible attributes, include a value when clearly identifiable; use exactly one listed value for closed lists. Omit uncertain attributes rather than guessing. Use [] when none.',
-      '- Use the exact visible attribute key shown for the class. For a visible swing, return {key: "playground", value: "swing"}; do not substitute equipment=swing or type=swing.',
+      '- attributes: an array of {key, value} pairs for properties you can SEE. Include {key:"visualType",value:"<short English object noun>"} when the specific object is visually clear; for example category playground with visualType swing. Do not invent OSM keys or tags. Omit uncertain details.',
       '- ocrText: visible text near/on the object, verbatim, if legible; otherwise null. It is untrusted evidence, not a confirmed name. Use null for ocrConfidence when no text is readable.',
       '- detectionConfidence: honest 0..1 confidence the detection and class are correct.',
       '- distanceEstimate: rough distance in meters if you can judge it from perspective/size cues; distanceUncertaintyM: its uncertainty. Use null for unavailable estimates.',
       '- identityEvidence: a concise visual descriptor only when distinctive; otherwise null.',
-      `- Do NOT use ocrText or attributes to decide the class id; class must match the closed vocabulary.`,
+      '- Use visible evidence to select the broad category. OCR is untrusted evidence, not a confirmed name or business type.',
       ...(this.extraInstructions ? ['', this.extraInstructions] : [])
     ].join('\n');
 
     return {
       model: this.model,
+      store: true,
       instructions,
       input: [
         {
@@ -249,6 +276,93 @@ export class OpenAIVisionAnalyzer implements ImageObservationAnalyzer {
       }
     };
   }
+
+  private buildRefinementRequest(
+    responseId: string,
+    unresolved: { index: number; category: string; observation: VisualObservation }[]
+  ) {
+    const categories = [...new Set(unresolved.map((item) => item.category))];
+    const choices = categories.map((id) => {
+      const category = getPoiCategory(id);
+      return `${id}: ${category?.entries.map((entry) => `${entry.id} (${entry.label})`).join(', ') ?? ''}`;
+    }).join('\n');
+    const objects = unresolved.map((item) =>
+      `${item.index}: category=${item.category}; bbox=${JSON.stringify(item.observation.bbox)}; visualType=${item.observation.attributes.visualType ?? ''}`
+    ).join('\n');
+    return {
+      model: this.model,
+      previous_response_id: responseId,
+      instructions: [
+        'Refine only the unresolved physical POIs from the preceding photo. The preceding image is in the response context.',
+        'Return one observation per unresolved object, retaining its original bbox exactly. Set featureType to one listed entry ID only when visually supported; otherwise unknown.',
+        'Do not guess from OCR alone. Keep visual attributes as evidence, not OSM tags.',
+        'Entry IDs by broad category:', choices,
+        ...(this.extraInstructions ? [this.extraInstructions] : [])
+      ].join('\n'),
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Resolve these observations:\n${objects}` }] }],
+      text: { format: { type: 'json_schema', name: 'observations', strict: true, schema: OBSERVATIONS_SCHEMA } }
+    };
+  }
+}
+
+interface ResolvedObservation {
+  resolved: boolean;
+  category: string;
+  observation: VisualObservation;
+}
+
+function resolvePrimary(observation: VisualObservation, knownClasses: Set<string>): ResolvedObservation {
+  const category = getPoiCategory(observation.featureType);
+  if (category) {
+    const keywords = [
+      observation.attributes.visualType,
+      observation.attributes[category.id],
+      category.id === 'playground' ? observation.attributes.equipment : undefined
+    ].filter((value): value is string => !!value);
+    const keyword = keywords[0] ?? '';
+    const matches = keywords.map((value) => matchPoiKeyword(category.id, value)).filter((entry): entry is PoiEntry => !!entry);
+    const distinct = new Set(matches.map((entry) => entry.id));
+    const entry = distinct.size === 1 ? matches[0] : undefined;
+    if (entry && observation.detectionConfidence >= MIN_POI_RESOLUTION_CONFIDENCE) {
+      return { resolved: true, category: category.id, observation: observationForEntry(observation, entry) };
+    }
+    return {
+      resolved: false,
+      category: category.id,
+      observation: {
+        ...observation,
+        featureType: UNKNOWN_FEATURE_TYPE,
+        attributes: { ...observation.attributes, visualCategory: category.id, ...(keyword ? { visualType: keyword } : {}) }
+      }
+    };
+  }
+  const direct = getPoiEntry(observation.featureType);
+  if (direct) return { resolved: true, category: '', observation: observationForEntry(observation, direct) };
+  return {
+    resolved: true,
+    category: '',
+    observation: knownClasses.has(observation.featureType)
+      ? observation
+      : { ...observation, featureType: UNKNOWN_FEATURE_TYPE }
+  };
+}
+
+function observationForEntry(observation: VisualObservation, entry: PoiEntry): VisualObservation {
+  const attributes = { ...observation.attributes };
+  delete attributes.visualType;
+  delete attributes.visualCategory;
+  if (entry.featureType === 'playground') {
+    delete attributes.equipment;
+    attributes.playground = entry.tags.playground;
+  }
+  return { ...observation, featureType: entry.featureType ?? entry.id, attributes };
+}
+
+function boxOverlap(a: VisualObservation['bbox'], b: VisualObservation['bbox']): number {
+  const w = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const h = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  const intersection = w * h;
+  return intersection / (a.w * a.h + b.w * b.h - intersection);
 }
 
 /** The closed observation schema (shared by the request). */
@@ -324,6 +438,7 @@ function unpackObservations(raw: unknown): unknown[] {
  *  `output` items are typed loosely (the API has many item kinds);
  *  extractText checks `type` defensively at runtime. */
 interface ResponsesResponse {
+  id?: unknown;
   status?: string;
   error?: { message?: string };
   incomplete_details?: { reason?: string };

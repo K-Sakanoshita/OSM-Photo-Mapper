@@ -16,11 +16,15 @@ describe('buildTagClauses (issue #5)', () => {
   const clauses = buildTagClauses();
 
   it('emits an exact-match clause for single-value keys', () => {
-    // Keys used by only one value get "="; amenity/emergency are shared by
-    // many classes (alternation instead).
-    expect(clauses).toContain('["highway"="street_lamp"]');
+    // Keys used by only one value get "="; category expansion gives
+    // highway/information/historic multiple values.
+    const highway = clauses.find((c) => c.startsWith('["highway"~'));
+    expect(highway).toContain('street_lamp');
+    expect(highway).toContain('bus_stop');
     expect(clauses).toContain('["barrier"="bollard"]');
-    expect(clauses).toContain('["information"="board"]');
+    const information = clauses.find((c) => c.startsWith('["information"~'));
+    expect(information).toContain('board');
+    expect(information).toContain('guidepost');
     const emergency = clauses.find((c) => c.startsWith('["emergency"~'));
     expect(emergency).toMatch(/\^\(([^)]*)\)\$"\]$/);
     expect(emergency).toContain('defibrillator');
@@ -53,7 +57,7 @@ describe('buildTagClauses (issue #5)', () => {
       new Set([
         'amenity', 'emergency', 'information', 'highway', 'man_made', 'barrier',
         'historic', 'tourism', 'ceremonial_gate', 'artwork_type', 'memorial',
-        'leisure', 'playground'
+        'leisure', 'playground', 'shop'
       ])
     );
   });
@@ -69,8 +73,9 @@ describe('buildTagClauses (issue #5)', () => {
     expect(manMade).toContain('ceremonial_gate');
     // torii is now identified by the type key ceremonial_gate=torii.
     expect(clauses).toContain('["ceremonial_gate"="torii"]');
-    // historic only carries the statue memorial convention (single value).
-    expect(clauses).toContain('["historic"="memorial"]');
+    const historic = clauses.find((c) => c.startsWith('["historic"~'));
+    expect(historic).toContain('memorial');
+    expect(historic).toContain('wayside_shrine');
     // tourism carries the board + artwork conventions (alternation).
     const tourism = clauses.find((c) => c.startsWith('["tourism"~'));
     expect(tourism).toBeDefined();

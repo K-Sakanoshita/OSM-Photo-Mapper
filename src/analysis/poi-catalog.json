@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-10-04",
+  "taginfoDataThrough": "2026-10-03",
+  "sources": {
+    "wiki": "https://wiki.openstreetmap.org/wiki/Map_features",
+    "taginfo": "https://taginfo.openstreetmap.org/"
+  },
+  "categories": [
+    {
+      "id": "street_furniture", "label": "Street furniture and small outdoor objects",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Key:amenity",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/amenity",
+      "entries": [
+        { "id": "bench", "label": "Bench", "keywords": ["bench", "ベンチ"], "tags": { "amenity": "bench" } },
+        { "id": "waste_basket", "label": "Waste basket", "keywords": ["waste basket", "trash bin", "ごみ箱"], "tags": { "amenity": "waste_basket" } },
+        { "id": "street_lamp", "label": "Street lamp", "keywords": ["street lamp", "streetlight", "街灯"], "tags": { "highway": "street_lamp" } },
+        { "id": "bollard", "label": "Bollard", "keywords": ["bollard", "車止め"], "tags": { "barrier": "bollard" } },
+        { "id": "manhole", "label": "Manhole", "keywords": ["manhole", "マンホール"], "tags": { "man_made": "manhole" } },
+        { "id": "clock", "label": "Public clock", "keywords": ["public clock", "clock", "時計"], "tags": { "amenity": "clock" } },
+        { "id": "vending_machine", "label": "Vending machine", "keywords": ["vending machine", "自動販売機"], "tags": { "amenity": "vending_machine" } }
+      ]
+    },
+    {
+      "id": "public_services", "label": "Public services and facilities",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Key:amenity",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/amenity",
+      "entries": [
+        { "id": "toilets", "label": "Public toilets", "keywords": ["toilets", "restroom", "公衆トイレ"], "tags": { "amenity": "toilets" } },
+        { "id": "drinking_water", "label": "Drinking water", "keywords": ["drinking water", "water fountain", "水飲み場"], "tags": { "amenity": "drinking_water" } },
+        { "id": "amenity_post_box", "label": "Post box", "keywords": ["post box", "mailbox", "郵便ポスト"], "tags": { "amenity": "post_box" } },
+        { "id": "amenity_atm", "label": "ATM", "keywords": ["atm", "cash machine", "現金自動預払機"], "tags": { "amenity": "atm" } },
+        { "id": "amenity_pharmacy", "label": "Pharmacy", "keywords": ["pharmacy", "drugstore", "薬局"], "tags": { "amenity": "pharmacy" } },
+        { "id": "amenity_bank", "label": "Bank", "keywords": ["bank", "銀行"], "tags": { "amenity": "bank" } },
+        { "id": "amenity_recycling", "label": "Recycling point", "keywords": ["recycling", "recycling point", "リサイクル"], "tags": { "amenity": "recycling" } },
+        { "id": "amenity_library", "label": "Library", "keywords": ["library", "図書館"], "tags": { "amenity": "library" }, "geometry": "either" }
+      ]
+    },
+    {
+      "id": "food_drink", "label": "Food and drink businesses",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Key:amenity",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/amenity",
+      "entries": [
+        { "id": "amenity_restaurant", "label": "Restaurant", "keywords": ["restaurant", "レストラン"], "tags": { "amenity": "restaurant" }, "geometry": "either" },
+        { "id": "amenity_cafe", "label": "Cafe", "keywords": ["cafe", "coffee shop", "喫茶店"], "tags": { "amenity": "cafe" }, "geometry": "either" },
+        { "id": "amenity_fast_food", "label": "Fast food", "keywords": ["fast food", "ファストフード"], "tags": { "amenity": "fast_food" }, "geometry": "either" },
+        { "id": "amenity_pub", "label": "Pub", "keywords": ["pub", "パブ"], "tags": { "amenity": "pub" }, "geometry": "either" },
+        { "id": "amenity_bar", "label": "Bar", "keywords": ["bar", "バー"], "tags": { "amenity": "bar" }, "geometry": "either" },
+        { "id": "amenity_ice_cream", "label": "Ice cream shop", "keywords": ["ice cream", "アイスクリーム店"], "tags": { "amenity": "ice_cream" }, "geometry": "either" }
+      ]
+    },
+    {
+      "id": "shop", "label": "Retail shops",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Key:shop",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/shop",
+      "entries": [
+        { "id": "shop_convenience", "label": "Convenience shop", "keywords": ["convenience store", "convenience shop", "コンビニ"], "tags": { "shop": "convenience" }, "geometry": "either" },
+        { "id": "shop_supermarket", "label": "Supermarket", "keywords": ["supermarket", "スーパー"], "tags": { "shop": "supermarket" }, "geometry": "either" },
+        { "id": "shop_bakery", "label": "Bakery", "keywords": ["bakery", "パン屋"], "tags": { "shop": "bakery" }, "geometry": "either" },
+        { "id": "shop_butcher", "label": "Butcher", "keywords": ["butcher", "肉屋"], "tags": { "shop": "butcher" }, "geometry": "either" },
+        { "id": "shop_clothes", "label": "Clothes shop", "keywords": ["clothes shop", "衣料品店"], "tags": { "shop": "clothes" }, "geometry": "either" },
+        { "id": "shop_hairdresser", "label": "Hairdresser", "keywords": ["hairdresser", "美容室", "理容室"], "tags": { "shop": "hairdresser" }, "geometry": "either" },
+        { "id": "shop_beauty", "label": "Beauty shop", "keywords": ["beauty shop", "化粧品店"], "tags": { "shop": "beauty" }, "geometry": "either" },
+        { "id": "shop_hardware", "label": "Hardware shop", "keywords": ["hardware store", "金物店"], "tags": { "shop": "hardware" }, "geometry": "either" },
+        { "id": "shop_mobile_phone", "label": "Mobile phone shop", "keywords": ["mobile phone shop", "携帯電話店"], "tags": { "shop": "mobile_phone" }, "geometry": "either" },
+        { "id": "shop_books", "label": "Bookshop", "keywords": ["bookshop", "本屋"], "tags": { "shop": "books" }, "geometry": "either" },
+        { "id": "shop_bicycle", "label": "Bicycle shop", "keywords": ["bicycle shop", "自転車店"], "tags": { "shop": "bicycle" }, "geometry": "either" },
+        { "id": "shop_florist", "label": "Florist", "keywords": ["florist", "花屋"], "tags": { "shop": "florist" }, "geometry": "either" }
+      ]
+    },
+    {
+      "id": "transport", "label": "Transport and parking facilities",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Map_features",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/amenity",
+      "entries": [
+        { "id": "bicycle_parking", "label": "Bicycle parking", "keywords": ["bicycle parking", "駐輪場"], "tags": { "amenity": "bicycle_parking" } },
+        { "id": "bicycle_repair_station", "label": "Bicycle repair station", "keywords": ["bicycle repair station", "自転車修理ステーション"], "tags": { "amenity": "bicycle_repair_station" } },
+        { "id": "amenity_parking", "label": "Car parking", "keywords": ["car parking", "parking lot", "駐車場"], "tags": { "amenity": "parking" }, "geometry": "area" },
+        { "id": "amenity_fuel", "label": "Fuel station", "keywords": ["fuel station", "gas station", "ガソリンスタンド"], "tags": { "amenity": "fuel" }, "geometry": "either" },
+        { "id": "amenity_charging_station", "label": "EV charging station", "keywords": ["charging station", "ev charger", "充電スタンド"], "tags": { "amenity": "charging_station" } },
+        { "id": "highway_bus_stop", "label": "Bus stop", "keywords": ["bus stop", "バス停"], "tags": { "highway": "bus_stop" } },
+        { "id": "amenity_taxi", "label": "Taxi stand", "keywords": ["taxi stand", "タクシー乗り場"], "tags": { "amenity": "taxi" } },
+        { "id": "amenity_car_wash", "label": "Car wash", "keywords": ["car wash", "洗車場"], "tags": { "amenity": "car_wash" }, "geometry": "either" }
+      ]
+    },
+    {
+      "id": "playground", "label": "Playground equipment and facilities",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Key:playground",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/playground",
+      "entries": [
+        { "id": "playground_swing", "featureType": "playground", "label": "Swing", "keywords": ["swing", "ブランコ"], "tags": { "playground": "swing" } },
+        { "id": "playground_slide", "featureType": "playground", "label": "Slide", "keywords": ["slide", "滑り台"], "tags": { "playground": "slide" } },
+        { "id": "playground_sandpit", "featureType": "playground", "label": "Sandpit", "keywords": ["sandpit", "sandbox", "砂場"], "tags": { "playground": "sandpit" } },
+        { "id": "playground_seesaw", "featureType": "playground", "label": "Seesaw", "keywords": ["seesaw", "シーソー"], "tags": { "playground": "seesaw" } },
+        { "id": "playground_springy", "featureType": "playground", "label": "Spring rider", "keywords": ["spring rider", "springy", "スプリング遊具"], "tags": { "playground": "springy" } },
+        { "id": "playground_climbingframe", "featureType": "playground", "label": "Climbing frame", "keywords": ["climbing frame", "climbingframe", "ジャングルジム"], "tags": { "playground": "climbingframe" } },
+        { "id": "playground_structure", "featureType": "playground", "label": "Play structure", "keywords": ["play structure", "composite playground", "複合遊具"], "tags": { "playground": "structure" } },
+        { "id": "playground_roundabout", "featureType": "playground", "label": "Roundabout", "keywords": ["roundabout", "回転遊具"], "tags": { "playground": "roundabout" } },
+        { "id": "playground_playhouse", "featureType": "playground", "label": "Playhouse", "keywords": ["playhouse", "遊び小屋"], "tags": { "playground": "playhouse" } },
+        { "id": "playground_basketswing", "featureType": "playground", "label": "Basket swing", "keywords": ["basket swing", "basketswing", "皿型ブランコ"], "tags": { "playground": "basketswing" } },
+        { "id": "playground_trampoline", "featureType": "playground", "label": "Trampoline", "keywords": ["trampoline", "トランポリン"], "tags": { "playground": "trampoline" } },
+        { "id": "playground_zipwire", "featureType": "playground", "label": "Zip wire", "keywords": ["zip wire", "zipwire", "ターザンロープ"], "tags": { "playground": "zipwire" } },
+        { "id": "playground_horizontal_bar", "featureType": "playground", "label": "Horizontal bar", "keywords": ["horizontal bar", "鉄棒"], "tags": { "playground": "horizontal_bar" } },
+        { "id": "playground_balancebeam", "featureType": "playground", "label": "Balance beam", "keywords": ["balance beam", "平均台"], "tags": { "playground": "balancebeam" } },
+        { "id": "playground_area", "label": "Whole playground", "keywords": ["playground area", "playground facility", "公園の遊び場"], "tags": { "leisure": "playground" }, "geometry": "area" }
+      ]
+    },
+    {
+      "id": "information_culture", "label": "Information, art and heritage",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Map_features",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/tourism",
+      "entries": [
+        { "id": "information_board", "label": "Information board", "keywords": ["information board", "notice board", "案内板", "掲示板"], "tags": { "tourism": "information", "information": "board" } },
+        { "id": "tourism_information_map", "label": "Information map", "keywords": ["information map", "案内地図"], "tags": { "tourism": "information", "information": "map" } },
+        { "id": "tourism_information_guidepost", "label": "Guidepost", "keywords": ["guidepost", "signpost", "道標"], "tags": { "tourism": "information", "information": "guidepost" } },
+        { "id": "statue", "label": "Statue or memorial", "keywords": ["statue", "memorial statue", "彫像"], "tags": {} },
+        { "id": "historic_memorial", "label": "Memorial", "keywords": ["memorial", "記念碑"], "tags": { "historic": "memorial" } },
+        { "id": "tourism_museum", "label": "Museum", "keywords": ["museum", "博物館"], "tags": { "tourism": "museum" }, "geometry": "either" }
+      ]
+    },
+    {
+      "id": "religious", "label": "Religious objects and places",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Map_features",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/man_made",
+      "entries": [
+        { "id": "torii", "label": "Torii gate", "keywords": ["torii", "鳥居"], "tags": { "man_made": "ceremonial_gate", "ceremonial_gate": "torii" } },
+        { "id": "stone_lantern", "label": "Stone lantern", "keywords": ["stone lantern", "石灯籠"], "tags": {} },
+        { "id": "komainu", "label": "Komainu guardian", "keywords": ["komainu", "狛犬"], "tags": {} },
+        { "id": "amenity_place_of_worship", "label": "Place of worship", "keywords": ["place of worship", "礼拝所"], "tags": { "amenity": "place_of_worship" }, "geometry": "area" },
+        { "id": "historic_wayside_shrine", "label": "Wayside shrine", "keywords": ["wayside shrine", "祠"], "tags": { "historic": "wayside_shrine" } }
+      ]
+    },
+    {
+      "id": "emergency", "label": "Emergency equipment",
+      "wiki": "https://wiki.openstreetmap.org/wiki/Key:emergency",
+      "taginfo": "https://taginfo.openstreetmap.org/keys/emergency",
+      "entries": [
+        { "id": "fire_hydrant", "label": "Fire hydrant", "keywords": ["fire hydrant", "消火栓"], "tags": { "emergency": "fire_hydrant" } },
+        { "id": "aed", "label": "Defibrillator", "keywords": ["defibrillator", "aed", "自動体外式除細動器"], "tags": { "emergency": "defibrillator" } },
+        { "id": "fire_extinguisher", "label": "Fire extinguisher", "keywords": ["fire extinguisher", "消火器"], "tags": { "emergency": "fire_extinguisher" } },
+        { "id": "fire_hose", "label": "Fire hose", "keywords": ["fire hose", "消火ホース"], "tags": { "emergency": "fire_hose" } },
+        { "id": "emergency_phone", "label": "Emergency phone", "keywords": ["emergency phone", "非常電話"], "tags": { "emergency": "phone" } },
+        { "id": "emergency_life_ring", "label": "Life ring", "keywords": ["life ring", "救命浮環"], "tags": { "emergency": "life_ring" } },
+        { "id": "emergency_water_tank", "label": "Fire water tank", "keywords": ["fire water tank", "防火水槽"], "tags": { "emergency": "water_tank" } }
+      ]
+    }
+  ]
+}

@@ -90,6 +90,17 @@ class FakeAnalyzer implements ImageObservationAnalyzer {
 /* ------------------------------------------------------------------ */
 
 describe('SurveyAnalysisPipeline (issue #2)', () => {
+  it('uses a catalog-backed shop class as an OSM POI candidate', async () => {
+    const survey = makeSurvey([makePhoto('p1')]);
+    const analyzer = new FakeAnalyzer(() => [
+      vis({ featureType: 'shop_bakery', bbox: BOX, detectionConfidence: 0.9 })
+    ]);
+    const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0].featureType).toBe('shop_bakery');
+    expect(res.candidates[0].tags).toEqual({ shop: 'bakery' });
+  });
+
   it('creates one candidate per distinct object in a photo', async () => {
     const survey = makeSurvey([makePhoto('p1', { cameraHeading: ch(90) })]);
     // Two benches, same camera: one 5 m ahead, one 40 m ahead -> far
@@ -134,9 +145,9 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       const analyzer = new FakeAnalyzer(() => []);
       await new SurveyAnalysisPipeline(analyzer).analyze(survey);
       const classes = analyzer.contexts[0].featureClasses;
-      expect(classes.find((c) => c.id === 'playground')?.visualAttributes).toEqual([
-        { key: 'playground', allowedValues: ['slide', 'swing', 'roundabout', 'sandbox', 'other'] }
-      ]);
+      expect(classes.find((c) => c.id === 'playground')?.visualAttributes?.[0]).toEqual({
+        key: 'playground', allowedValues: expect.arrayContaining(['swing', 'slide', 'sandpit', 'seesaw'])
+      });
       expect(classes.find((c) => c.id === 'toilets')?.visualAttributes).toBeUndefined();
       expect(JSON.stringify(classes)).not.toContain('requiredTags');
       expect(JSON.stringify(classes)).not.toContain('geometryPreference');
@@ -160,10 +171,10 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
     it('keeps an invalid playground subtype unconfirmed', async () => {
       const survey = makeSurvey([makePhoto('p1')]);
       const analyzer = new FakeAnalyzer(() => [
-        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { playground: 'seesaw' } })
+        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { playground: 'unlisted_ride' } })
       ]);
       const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
-      expect(res.observations[0].detectedAttributes).toEqual({ playground: 'seesaw' });
+      expect(res.observations[0].detectedAttributes).toEqual({ playground: 'unlisted_ride' });
       expect(res.candidates[0].tags).not.toHaveProperty('playground');
     });
 
@@ -187,13 +198,13 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
     it('does not convert invalid or contradictory equipment evidence into tags', async () => {
       const survey = makeSurvey([makePhoto('p1')]);
       const analyzer = new FakeAnalyzer(() => [
-        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { equipment: 'trampoline' } }),
+        vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { equipment: 'unlisted_ride' } }),
         vis({ featureType: 'playground', bbox: BOX, detectionConfidence: 0.99, attributes: { equipment: 'swing', playground: 'slide' } })
       ]);
       const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
       expect(res.candidates).toHaveLength(2);
       expect(res.candidates.every((candidate) => !('playground' in candidate.tags))).toBe(true);
-      expect(res.observations[0].detectedAttributes).toEqual({ equipment: 'trampoline' });
+      expect(res.observations[0].detectedAttributes).toEqual({ equipment: 'unlisted_ride' });
       expect(res.observations[1].detectedAttributes).toEqual({ equipment: 'swing', playground: 'slide' });
     });
 

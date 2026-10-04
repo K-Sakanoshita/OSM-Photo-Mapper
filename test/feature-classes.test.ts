@@ -44,7 +44,7 @@ describe('feature class presets (issue #5)', () => {
     // ...but the known-allowed values are offered as a review-time picker.
     const common = commonValuesFor('playground');
     expect(common.playground).toEqual(
-      expect.arrayContaining(['slide', 'swing', 'roundabout', 'sandbox', 'other'])
+      expect.arrayContaining(['slide', 'swing', 'roundabout', 'sandpit', 'seesaw'])
     );
     expect(common.playground).toContain('slide');
   });
@@ -148,8 +148,8 @@ describe('mergeTags', () => {
 });
 
 describe('issue #9: expanded class set, geometry policy, review-only mappings', () => {
-  it('defines 22 classes, each with category, autoTag and geometryPreference', () => {
-    expect(FEATURE_CLASSES).toHaveLength(22);
+  it('defines catalog-backed classes, each with category, autoTag and geometryPreference', () => {
+    expect(FEATURE_CLASSES.length).toBeGreaterThan(50);
     for (const cls of FEATURE_CLASSES) {
       expect(cls.category, cls.id).toBeTruthy();
       expect(typeof cls.autoTag, cls.id).toBe('boolean');

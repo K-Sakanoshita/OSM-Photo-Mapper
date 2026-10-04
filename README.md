@@ -207,11 +207,19 @@ OpenAI Analyzer は、写真ごとに主に以下を返します。
 
 Structured Outputs を利用し、想定外の自由形式レスポンスをそのまま OSM 編集へ流さない構成です。
 
+### POI の二段階認識
+
+POI の大分類と小分類は [`src/analysis/poi-catalog.json`](src/analysis/poi-catalog.json) に定義しています。OSM Wiki のタグ説明と Taginfo の使用状況を参照した主要項目の抜粋であり、OSM タグ全体を網羅するものではありません。設定ファイル内に各分類の参照 URL を記載しています。
+
+初回の写真解析では大分類の ID・名称だけを送ります。モデルが `playground` と `visualType=swing` のように明確な種類を返し、設定のキーワードと一意に一致すれば、アプリ側で `playground=swing` に対応付けて完了します。曖昧な物体がある場合だけ、同じ写真の `previous_response_id` と該当大分類の小分類 ID・名称を使って追加問い合わせをします。追加リクエストには画像データを再添付しません。前回の画像を含む文脈の入力トークンは課金対象です。
+
+小分類が確認できない場合は OSM タグを推測せず、観測情報を未確定候補として残します。OSM タグの適用とエクスポート判定は従来どおりアプリ側で行います。
+
 ---
 
 ## 対応している Feature Class
 
-現在の閉じた語彙は 22 種類です。
+従来の個別 Feature Class に加え、設定ファイルから店舗・飲食店などのクラスを生成します。以下は従来の個別クラスです。
 
 ### Business / Amenities
 
@@ -693,7 +701,7 @@ OpenAI Responses API
 - review-only feature は人間が意味を確定する必要がある
 - カメラ方位が得られない端末・撮影方法では位置精度が下がる
 - 写真からの距離推定は近似値
-- AI が認識可能でも、現在の閉じた feature class にない物体は OSM candidate にならない
+- POI 設定にない小分類や判別できない物体は未確定候補として残る
 - Cloudflare Worker の現在の rate limit は単独利用 MVP 向け
 
 ---

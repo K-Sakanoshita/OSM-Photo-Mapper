@@ -120,6 +120,89 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
     expect(res.map((item) => item.attributes.playground)).toEqual(['swing', 'slide']);
   });
 
+  it('resolves playground + swing locally without a second API request', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(init!.body as string));
+      return new Response(responsesWith([
+        { featureType: 'playground', bbox: BOX, attributes: [{ key: 'visualType', value: 'swing' }], detectionConfidence: 0.99 }
+      ]), { status: 200 });
+    }) as typeof fetch;
+    const result = await analyzer(fetchImpl).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(bodies).toHaveLength(1);
+    expect(result).toEqual([expect.objectContaining({ featureType: 'playground', attributes: { playground: 'swing' } })]);
+    expect(JSON.stringify(bodies[0])).not.toContain('playground_swing');
+  });
+
+  it('continues an unresolved shop with text-only subtype choices and the previous response ID', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(init!.body as string));
+      return new Response(bodies.length === 1
+        ? responsesWith([{ featureType: 'shop', bbox: BOX, attributes: [{ key: 'visualType', value: 'storefront' }], detectionConfidence: 0.85 }])
+        : responsesWith([{ featureType: 'shop_bakery', bbox: { x: 0.205, y: 0.305, w: 0.39, h: 0.29 }, attributes: [], detectionConfidence: 0.85 }]), { status: 200 });
+    }) as typeof fetch;
+    const result = await analyzer(fetchImpl).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].previous_response_id).toBe('resp_test');
+    expect(JSON.stringify(bodies[1])).not.toContain('input_image');
+    expect(JSON.stringify(bodies[1])).toContain('shop_bakery');
+    expect(JSON.stringify(bodies[1])).not.toContain('playground_swing');
+    expect(result[0].featureType).toBe('shop_bakery');
+  });
+
+  it('matches two unresolved objects to their own boxes even if refinement returns reversed order', async () => {
+    const left = { x: 0.05, y: 0.2, w: 0.3, h: 0.5 };
+    const right = { x: 0.6, y: 0.2, w: 0.3, h: 0.5 };
+    let requests = 0;
+    const fetchImpl = (async () => {
+      requests++;
+      return new Response(requests === 1
+        ? responsesWith([
+          { featureType: 'shop', bbox: left, attributes: [{ key: 'visualType', value: 'storefront' }], detectionConfidence: 0.9 },
+          { featureType: 'shop', bbox: right, attributes: [{ key: 'visualType', value: 'storefront' }], detectionConfidence: 0.9 }
+        ])
+        : responsesWith([
+          { featureType: 'shop_bakery', bbox: right, attributes: [], detectionConfidence: 0.9 },
+          { featureType: 'shop_convenience', bbox: left, attributes: [], detectionConfidence: 0.9 }
+        ]), { status: 200 });
+    }) as typeof fetch;
+    const result = await analyzer(fetchImpl).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(requests).toBe(2);
+    expect(result.map((item) => item.featureType)).toEqual(['shop_convenience', 'shop_bakery']);
+    expect(result.map((item) => item.bbox)).toEqual([left, right]);
+  });
+
+  it('keeps unresolved first-pass evidence without an automatic tag when refinement fails', async () => {
+    let requests = 0;
+    const fetchImpl = (async () => {
+      requests++;
+      return new Response(requests === 1
+        ? responsesWith([{ featureType: 'playground', bbox: BOX, attributes: [{ key: 'visualType', value: 'unfamiliar device' }], detectionConfidence: 0.8 }])
+        : JSON.stringify({ error: { message: 'temporary failure' } }), { status: requests === 1 ? 200 : 502 });
+    }) as typeof fetch;
+    const result = await analyzer(fetchImpl).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(requests).toBe(2);
+    expect(result[0].featureType).toBe('unknown');
+    expect(result[0].attributes).toMatchObject({ visualCategory: 'playground', visualType: 'unfamiliar device' });
+  });
+
+  it('does not auto-map contradictory or low-confidence subtype evidence', async () => {
+    let requests = 0;
+    const fetchImpl = (async () => {
+      requests++;
+      return new Response(requests === 1
+        ? responsesWith([{ featureType: 'playground', bbox: BOX, attributes: [
+          { key: 'visualType', value: 'swing' }, { key: 'playground', value: 'slide' }
+        ], detectionConfidence: 0.95 }])
+        : responsesWith([{ featureType: 'playground_swing', bbox: BOX, attributes: [], detectionConfidence: 0.5 }]), { status: 200 });
+    }) as typeof fetch;
+    const result = await analyzer(fetchImpl).analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
+    expect(requests).toBe(2);
+    expect(result[0].featureType).toBe('unknown');
+    expect(result[0].attributes).toMatchObject({ visualCategory: 'playground', visualType: 'swing', playground: 'slide' });
+  });
+
   it('sends the Responses API request: key, image, vocabulary, json_schema text.format', async () => {
     await analyzer().analyzePhoto(makePhoto('p1'), makeContext(makePhoto('p1')));
     // Direct mode hits the OpenAI Responses API endpoint.
@@ -133,15 +216,15 @@ describe('OpenAIVisionAnalyzer (issues #2 + #12: Responses API, dual transport)'
       text: { format: { type: string; name: string; schema: unknown; strict?: unknown } };
     };
     expect(body.model).toBe('gpt-4o-mini');
-    // Closed vocabulary + rules travel via top-level `instructions`.
-    expect(body.instructions).toContain('- bench (Bench)');
-    expect(body.instructions).toContain('- toilets (Public toilets)');
-    expect(body.instructions).toContain('playground: slide | swing | roundabout | sandbox | other');
-    expect(body.instructions).toContain('A swing frame with multiple seats is one swing.');
+    // The first pass sees only broad groups, never the subtype catalog.
+    expect(body.instructions).toContain('- playground (Playground equipment and facilities)');
+    expect(body.instructions).toContain('- shop (Retail shops)');
+    expect(body.instructions).not.toContain('playground_swing');
+    expect(body.instructions).not.toContain('shop_bakery');
+    expect(body.store).toBe(true);
     expect(body.instructions).toContain('foreground, background, edges, and partly occluded objects');
-    expect(body.instructions).toContain('multiple features of the same class');
-    expect(body.instructions).toContain('include a value when clearly identifiable');
-    expect(body.instructions).toContain('do not substitute equipment=swing or type=swing');
+    expect(body.instructions).toContain('multiple objects in the same category');
+    expect(body.instructions).toContain('visualType');
     expect(body.instructions).toContain('unknown');
     // The image + prompt travel as input message items.
     const msg = inputMessage(body);
@@ -418,7 +501,7 @@ describe('proxy transport (issue #12)', () => {
       input: unknown[];
       text: { format: { type: string; name: string; strict?: unknown } };
     };
-    expect(body.instructions).toContain('- bench (Bench)');
+    expect(body.instructions).toContain('- street_furniture (Street furniture and small outdoor objects)');
     const msg = inputMessage(body);
     expect(msg.content[0].type).toBe('input_image');
     expect(msg.content[0].image_url).toBe('data:image/jpeg;base64,TESTDATA');
