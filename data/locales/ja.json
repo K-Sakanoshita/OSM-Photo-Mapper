@@ -278,7 +278,12 @@
     "Close popup": "ポップアップを閉じる",
     "GPS acquiring…": "GPS取得中…",
     "GPS unavailable": "GPS取得不可",
-    "GPS on": "GPS ON"
+    "GPS on": "GPS ON",
+    "Estimated distance": "推定距離",
+    "Estimated object bearing": "対象への推定方位",
+    "(AI estimate from photo)": "（写真からのAI概算）",
+    "unavailable — no camera heading": "取得不可：カメラの方位情報なし",
+    "(north 0°, east 90°)": "（北0°・東90°）"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",
@@ -351,6 +356,7 @@
     "Open photo {number}": "写真{number}を開く",
     "{source} @ {coordinates}": "{source} @ {coordinates}",
     "Remove {key}": "{key}を削除",
-    "GPS track: {count} samples": "GPS軌跡：{count}件"
+    "GPS track: {count} samples": "GPS軌跡：{count}件",
+    "Image direction: {angle}° from center (right + / left −; assumed field of view)": "写真内の方向：中央から{angle}°（右＋／左−・画角を仮定した概算）"
   }
 }

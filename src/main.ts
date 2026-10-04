@@ -44,7 +44,7 @@ import {
 } from './analysis/feature-classes';
 import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
-import { distanceMeters, estimatePosition, rayFromPhoto } from './analysis/position';
+import { distanceMeters, estimatePosition, imageBearing, rayFromPhoto } from './analysis/position';
 import { mergeCandidateWithOsm } from './osm/merge-candidate';
 import { pinUndoBefore, restorePinUndo, type PinUndo } from './map/pin-undo';
 import { selectProvider } from './imagery/providers';
@@ -1538,8 +1538,27 @@ class App {
       }
       appendLocalized(card, el('div', { class: 'row' },
         `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
-        `Distance: ${obs.distanceEstimate == null ? 'unknown' : `${obs.distanceEstimate.toFixed(0)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(0)} m`}`} · `,
         `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : t('none')}`
+      ));
+      const photo = photoByObs.get(obs.id);
+      const heading = photo?.cameraHeading;
+      const ray = photo ? rayFromPhoto(photo, obs) : null;
+      const offset = imageBearing(0, obs.bbox);
+      const signedOffset = offset > 180 ? offset - 360 : offset;
+      appendLocalized(card, el('div', { class: 'row' },
+        el('b', {}, 'Estimated distance'),
+        ` ${obs.distanceEstimate == null ? t('unknown') : `${obs.distanceEstimate.toFixed(1)} m${obs.distanceUncertaintyM == null ? '' : ` ±${obs.distanceUncertaintyM.toFixed(1)} m`}`}`,
+        el('span', { class: 'hint' }, ' (AI estimate from photo)')
+      ));
+      appendLocalized(card, el('div', { class: 'row' },
+        el('b', {}, 'Estimated object bearing'),
+        heading
+          ? ` ${imageBearing(heading.bearing, obs.bbox).toFixed(0)}°${ray?.bearingUncDeg == null ? '' : ` ±${ray.bearingUncDeg.toFixed(0)}°`} · ${t(heading.source)}`
+          : ' unavailable — no camera heading',
+        el('span', { class: 'hint' }, ' (north 0°, east 90°)')
+      ));
+      appendLocalized(card, el('div', { class: 'row hint' },
+        `Image direction: ${signedOffset >= 0 ? '+' : ''}${signedOffset.toFixed(0)}° from center (right + / left −; assumed field of view)`
       ));
       appendLocalized(card, el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
     }
