@@ -373,3 +373,20 @@ describe('analysis provenance persistence (issue #15)', () => {
     expect((await surveyDb.loadSurvey('s1'))?.candidates[0]).toMatchObject({ analyzer: 'openai', analyzerModel: 'gpt-4o-mini' });
   });
 });
+
+describe('atomic candidate grouping persistence', () => {
+  it('preserves source cards for separation after reload without changing observations', async () => {
+    const { survey, cands } = makeLegacySurvey();
+    await surveyDb.createSurvey(survey);
+    const a = cands[0], b = { ...a, id: 'second' };
+    const observation: Observation = { id: 'identity-evidence', surveyId: survey.id, photoId: 'p1', featureType: 'bench', bbox: { x: 0, y: 0, w: .5, h: .5 }, tagSuggestions: {}, tagConfidence: .9 };
+    await surveyDb.saveAnalysis(survey.id, [observation], [a, b]);
+    await surveyDb.replaceCandidateGroup([a.id, b.id], [{ ...a, mergeSources: [a, b] }]);
+    const grouped = (await surveyDb.loadSurvey(survey.id))!.candidates;
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].mergeSources).toEqual([a, b]);
+    expect(await surveyDb.listObservations(survey.id)).toEqual([observation]);
+    await surveyDb.replaceCandidateGroup([a.id], grouped[0].mergeSources!);
+    expect((await surveyDb.loadSurvey(survey.id))!.candidates).toHaveLength(2);
+  });
+});

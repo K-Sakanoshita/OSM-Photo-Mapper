@@ -1,3 +1,4 @@
+import { estimateDistancePosition } from './distance-position';
 import type {
   BBox,
   CameraHeadingSource,
@@ -187,8 +188,9 @@ function rayEvidence(r: ObservationRay): RayEvidence {
 /**
  * Estimate an object's position from one or more observation rays.
  *
- *  - No usable heading anywhere: the GPS positions themselves are the
- *    evidence -> weighted centroid, quality 'no-orientation'.
+ *  - No usable heading: multiple distinct GPS origins + image distances
+ *    give a distance-only proposal, including ambiguous solutions in its range.
+ *    Otherwise use a GPS centroid with the object's distance included in uncertainty.
  *  - Exactly one usable ray: project along it (distance-dominated),
  *    quality 'single-ray'.
  *  - Two or more usable rays: weighted ray intersection. The fit is
@@ -208,6 +210,8 @@ export function estimatePosition(rays: ObservationRay[]): PositionEstimate {
   pushStaleWarnings(warnings, rays);
 
   if (headingRays.length === 0) {
+    const distance = estimateDistancePosition(rays);
+    if (distance) return { ...distance, warnings: [...warnings, ...distance.warnings] };
     return estimateNoOrientation(rays, warnings);
   }
 
@@ -260,7 +264,8 @@ function estimateNoOrientation(
   const lat = wx / wsum;
   const lon = wy / wsum;
   const meanAcc = sqrt(accSqSum / rays.length);
-  const uncertaintyMeters = sqrt(meanAcc * meanAcc + maxDrift * maxDrift);
+  const distanceRadius = max(...rays.map((r) => max(0, r.distanceM) + (r.distanceUncertaintyM ?? 0)));
+  const uncertaintyMeters = sqrt(meanAcc * meanAcc + maxDrift * maxDrift + distanceRadius * distanceRadius);
   const positionConfidence = min(clamp01(1 - uncertaintyMeters / 80), 0.2);
   return {
     lat,

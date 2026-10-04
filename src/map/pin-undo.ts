@@ -2,6 +2,7 @@ import type { FeatureCandidate } from '../types';
 
 export interface PinUndo {
   candidateId: string;
+  group?: { before: FeatureCandidate[]; afterIds: string[] };
   label: string;
   before?: Partial<FeatureCandidate>;
   deleted?: FeatureCandidate;

@@ -2,6 +2,7 @@ import maplibregl from 'maplibre-gl';
 import type { FeatureCandidate, GpsSample, Photo, Survey } from '../types';
 import { iconForTags, iconUrl } from './tag-icon';
 import { appAssetUrl, t } from '../i18n';
+import { bearingToLatLon } from '../analysis/position';
 import { BasemapControl } from './basemap-control';
 
 /**
@@ -17,6 +18,7 @@ export class MapView {
   private candidateHitLayerId = 'candidates-hit';
   private candidateSourceId = 'candidates-source';
   private candidateData: GeoJSON.FeatureCollection = emptyFeatureCollection();
+  private uncertaintyData: GeoJSON.FeatureCollection = emptyFeatureCollection();
   private trackLayerId = 'track';
   private trackSourceId = 'track-source';
   private trackData: GeoJSON.FeatureCollection = emptyFeatureCollection();
@@ -80,6 +82,9 @@ export class MapView {
       });
       (this.map.getSource(this.photoSourceId) as maplibregl.GeoJSONSource).setData(this.photoData);
 
+      this.map.addSource('candidate-uncertainty', { type: 'geojson', data: this.uncertaintyData });
+      this.map.addLayer({ id: 'candidate-uncertainty-fill', type: 'fill', source: 'candidate-uncertainty', filter: ['==', ['get', 'selected'], true], paint: { 'fill-color': '#e6a100', 'fill-opacity': .12 } });
+      this.map.addLayer({ id: 'candidate-uncertainty-line', type: 'line', source: 'candidate-uncertainty', filter: ['==', ['get', 'selected'], true], paint: { 'line-color': '#c88700', 'line-width': 2, 'line-dasharray': [3, 2] } });
       this.map.addSource(this.candidateSourceId, { type: 'geojson', data: emptyFeatureCollection() });
       this.map.addLayer({
         id: this.candidateHitLayerId,
@@ -209,6 +214,19 @@ export class MapView {
       features
     };
     (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
+    this.uncertaintyData = {
+      type: 'FeatureCollection',
+      features: candidates.filter((c) => c.mergeSources?.length && c.status !== 'existing' && c.positionSolution && Number.isFinite(c.positionUncertaintyMeters)).map((c) => {
+        const center = c.positionSolution!.estimatedPosition;
+        const ring = Array.from({ length: 65 }, (_, index) => {
+          const p = bearingToLatLon(center.lat, center.lon, index * 360 / 64, Math.min(100000, Math.max(1, c.positionUncertaintyMeters!)));
+          return [p.lon, p.lat];
+        });
+        ring[64] = [...ring[0]];
+        return { type: 'Feature' as const, properties: { id: c.id, selected: c.id === this.selectedCandidateId }, geometry: { type: 'Polygon' as const, coordinates: [ring] } };
+      })
+    };
+    (this.map.getSource('candidate-uncertainty') as maplibregl.GeoJSONSource | undefined)?.setData(this.uncertaintyData);
     this.setSelectedCandidate(this.selectedCandidateId);
     if (this.map.getSource(this.candidateSourceId)) void this.loadCandidateIcons();
   }
@@ -227,6 +245,10 @@ export class MapView {
       if (feature.properties) feature.properties.selected = feature.properties.id === id;
     }
     (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource | undefined)?.setData(this.candidateData);
+    for (const feature of this.uncertaintyData.features) {
+      if (feature.properties) feature.properties.selected = feature.properties.id === id;
+    }
+    (this.map.getSource('candidate-uncertainty') as maplibregl.GeoJSONSource | undefined)?.setData(this.uncertaintyData);
     for (const marker of this.osmMarkers) {
       const element = marker.getElement();
       const selected = id != null && JSON.parse(element.dataset.candidateIds ?? '[]').includes(id);

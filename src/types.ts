@@ -232,7 +232,7 @@ export type CandidateStatus = 'new' | 'existing' | 'excluded';
 /** A merged, reviewable map feature derived from one or more observations. */
 /** One provenance entry for a position solution (issue #8). */
 export interface PositionEvidence {
-  source: 'gps-track' | 'ray-projection' | 'aerial-structure' | 'osm-object';
+  source: 'gps-track' | 'distance-estimate' | 'ray-projection' | 'aerial-structure' | 'osm-object';
   label: string;
   detail?: string;
 }
@@ -280,6 +280,7 @@ export type PositionQuality =
   | 'single-ray' // projection along one bearing (distance-dominated)
   | 'weak-geometry' // rays nearly parallel or baseline too short
   | 'contradictory' // rays or distances strongly disagree
+  | 'distance-only' // distances from multiple cameras; direction remains uncertain
   | 'no-orientation'; // no usable heading: GPS location only
 
 /** Human-readable label for a position quality (review UI). */
@@ -289,9 +290,12 @@ export const POSITION_QUALITY_LABEL: Record<PositionQuality, string> = {
   'weak-geometry': 'Weak geometry (nearly parallel rays)',
   contradictory: 'Contradictory observations',
   'no-orientation': 'No orientation (GPS only)',
+  'distance-only': 'Provisional position (distances only)',
 };
 
 export interface FeatureCandidate {
+  /** Original reviewed candidates, preserved for explicit separation after reload. */
+  mergeSources?: FeatureCandidate[];
   id: string;
   surveyId: string;
   /** Persisted source of every contributing observation. 'mock' is legacy data only. */

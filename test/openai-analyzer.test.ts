@@ -538,3 +538,22 @@ describe('proxy transport (issue #12)', () => {
     expect(headers['authorization']).toBeUndefined();
   });
 });
+
+describe('explicit object comparison', () => {
+  const items = ['a', 'b'].map((id) => ({ photo: makePhoto(id), observation: { id, photoId: id, surveyId: 's1', featureType: 'unknown', bbox: { x: .2, y: .3, w: .4, h: .5 }, tagSuggestions: {}, tagConfidence: .9 } }));
+  const response = (verdict: string) => JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ verdict, reason: 'Unique inscription matches' }) }] }] });
+  it('sends both marked objects and parses a verdict without modifying observations', async () => {
+    const instance = analyzer(stubFetch(response('same')));
+    expect(await instance.compareObjects(items)).toEqual({ verdict: 'same', reason: 'Unique inscription matches' });
+    const body = JSON.parse(lastInit!.body as string);
+    expect(body.input[0].content.filter((c: { type: string }) => c.type === 'input_image')).toHaveLength(2);
+    expect(body.instructions).toContain('NOT proof');
+    expect(items[0].observation.featureType).toBe('unknown');
+  });
+  it('keeps uncertain and different verdicts distinct', async () => {
+    for (const verdict of ['uncertain', 'different']) expect((await analyzer(stubFetch(response(verdict))).compareObjects(items)).verdict).toBe(verdict);
+  });
+  it('rejects invalid verdicts', async () => {
+    await expect(analyzer(stubFetch(response('merge immediately'))).compareObjects(items)).rejects.toThrow('Invalid identity');
+  });
+});

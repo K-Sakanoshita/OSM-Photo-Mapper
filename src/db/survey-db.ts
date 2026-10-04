@@ -276,6 +276,15 @@ export const surveyDb = {
     );
   },
 
+  /** Atomic candidate grouping/separation; observations and photos remain unchanged. */
+  async replaceCandidateGroup(removeIds: string[], candidates: FeatureCandidate[]): Promise<void> {
+    await tx([STORES.candidates], 'readwrite', (t) => {
+      const store = t.objectStore(STORES.candidates);
+      for (const id of removeIds) store.delete(id);
+      for (const candidate of candidates) store.put(candidate);
+    });
+  },
+
   async deleteCandidate(id: string): Promise<void> {
     await tx([STORES.candidates], 'readwrite', (t) => t.objectStore(STORES.candidates).delete(id));
   },

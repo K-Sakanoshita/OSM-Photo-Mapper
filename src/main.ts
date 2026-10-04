@@ -25,6 +25,7 @@ import {
   type OneShotFix
 } from './capture/camera-position';
 import { surveyDb } from './db/survey-db';
+import { canGroupCandidates, groupEvidence, mergeCandidateGroup } from './analysis/candidate-group';
 import { SurveyAnalysisPipeline } from './analysis/pipeline';
 import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
 import { loadProxySettings, saveProxySettings } from './analysis/proxy-settings';
@@ -1558,7 +1559,7 @@ class App {
             )
           : '',
         c.positionUncertaintyMeters != null
-          ? ` · σ ${c.positionUncertaintyMeters.toFixed(0)} m`
+          ? ` · ${c.positionQuality === 'distance-only' ? t('Estimated range') : 'σ'} ${c.positionUncertaintyMeters.toFixed(0)} m`
           : '',
         ' '
       );
@@ -1673,6 +1674,10 @@ class App {
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? (c.analyzer === 'manual' ? 'Custom tags' : c.featureType)), statusSel)
     );
     appendLocalized(card, el('button', { class: 'btn small', onclick: () => void this.onDeleteCandidate(c) }, 'Delete pin'));
+    if (evidence.length) appendLocalized(card, el('button', { class: 'btn small', onclick: () => void this.showGroupDialog(c) }, 'Group same object'));
+    if (c.mergeSources?.length) appendLocalized(card, el('p', { class: 'hint' }, 'Provisional position: the dashed area shows estimated uncertainty. Move the pin to confirm its location.'));
+    if (c.mergeSources?.length) appendLocalized(card, el('button', { class: 'btn small', onclick: () => void this.separateCandidateGroup(c) }, 'Separate grouped photos'));
+
     appendLocalized(card, el('button', { class: 'btn small', onclick: () => {
       const photo = evidence.map((obs) => photoByObs.get(obs.id)).find((p) => p != null);
       if (photo) { void this.showPhotoDetails(photo); return; }
@@ -1809,7 +1814,7 @@ class App {
       if (ps.snappedPosition && ps.linkedOsmId != null) {
         steps.push(`snapped → osm/${ps.linkedOsmType ?? 'node'}/${ps.linkedOsmId} (${Math.round((ps.snapConfidence ?? 0) * 100)}%)`);
       }
-      const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.map((step) => t(step)).join(' → ')}`, ` · σ ${ps.uncertaintyMeters.toFixed(0)} m`);
+      const solRow = el('div', { class: 'row solution-row' }, el('b', {}, 'Solution'), ` ${steps.map((step) => t(step)).join(' → ')}`, ` · ${ps.positionQuality === 'distance-only' ? t('Estimated range') : 'σ'} ${ps.uncertaintyMeters.toFixed(0)} m`);
       for (const e of ps.evidence) {
         appendLocalized(solRow, el('span', { class: 'ev-chip', title: e.detail ?? e.label }, e.label));
       }
@@ -2242,6 +2247,89 @@ class App {
     this.refreshCandidateEditor();
   }
 
+  private async showGroupDialog(target: FeatureCandidate): Promise<void> {
+    const s = this.survey;
+    if (!s) return;
+    const observations = await surveyDb.listObservations(s.id);
+    if (this.survey !== s) return;
+    const candidates = s.candidates.filter((c) => c.id !== target.id && canGroupCandidates([target, c], observations));
+    const dialog = el('dialog', { class: 'photo-details-dialog', 'aria-label': 'Group same object' }) as HTMLDialogElement;
+    const close = el('button', { class: 'btn', onclick: () => dialog.close() }, 'Close');
+    const selection = el('select', { 'aria-label': 'Object to group' },
+      ...candidates.map((c) => el('option', { value: c.id }, `${s.candidates.indexOf(c) + 1}: ${getFeatureClass(c.featureType)?.label ?? c.featureType}`)));
+    const preview = el('div', { class: 'group-preview' });
+    const verdict = el('p', { role: 'status', 'aria-live': 'polite' });
+    const selected = () => candidates.find((c) => c.id === selection.value);
+    const redraw = () => {
+      preview.replaceChildren(); verdict.textContent = '';
+      const source = selected();
+      if (!source) return;
+      for (const candidate of [target, source]) {
+        const column = el('section', {}, el('h3', {}, `${s.candidates.indexOf(candidate) + 1}: ${getFeatureClass(candidate.featureType)?.label ?? candidate.featureType}`));
+        for (const obs of groupEvidence([candidate], observations)) {
+          const photo = s.photos.find((p) => p.id === obs.photoId);
+          if (!photo?.image) continue;
+          const b = obs.bbox;
+          column.append(el('div', { class: 'evidence-photo' }, el('img', { src: photo.image, alt: 'Object to compare' }),
+            el('div', { class: 'evidence-box', style: `left:${b.x * 100}%;top:${b.y * 100}%;width:${b.w * 100}%;height:${b.h * 100}%` })));
+        }
+        preview.append(column);
+      }
+    };
+    const compare = el('button', { class: 'btn', disabled: !candidates.length, onclick: async () => {
+      const source = selected();
+      if (!source) return;
+      const analyzer = this.createAnalyzer();
+      if (!(analyzer instanceof OpenAIVisionAnalyzer)) return;
+      selection.disabled = compare.disabled = merge.disabled = true;
+      verdict.textContent = t('Comparing photos…');
+      try {
+        const items = groupEvidence([target, source], observations).map((observation) => ({ observation, photo: s.photos.find((p) => p.id === observation.photoId)! }));
+        if (items.length > 8) throw new Error(t('Compare up to 8 photos at a time'));
+        const result = await analyzer.compareObjects(items);
+        verdict.textContent = `${t(result.verdict === 'same' ? 'Possibly the same object' : result.verdict === 'different' ? 'Different objects' : 'Identity uncertain')}: ${result.reason}`;
+      } catch (error) { verdict.textContent = (error as Error).message; }
+      finally { selection.disabled = compare.disabled = merge.disabled = false; }
+    } }, 'Compare with AI');
+    const merge = el('button', { class: 'btn primary', disabled: !candidates.length, onclick: async () => {
+      const source = selected();
+      if (!source || this.survey !== s || !s.candidates.includes(target) || !s.candidates.includes(source)) return;
+      selection.disabled = compare.disabled = merge.disabled = true;
+      try {
+        const grouped = mergeCandidateGroup(s, target, source, observations);
+        await surveyDb.replaceCandidateGroup([target.id, source.id], [grouped]);
+        s.candidates = s.candidates.filter((c) => c.id !== source.id).map((c) => c.id === target.id ? grouped : c);
+        this.recordPinUndo(s.id, { candidateId: target.id, label: 'Undo grouping', group: { before: structuredClone([target, source]), afterIds: [target.id] } });
+        this.selectedFieldCandidateId = target.id;
+        this.mapView.setCandidates(s.candidates); this.mapView.setSelectedCandidate(target.id);
+        dialog.close(); this.refreshCandidateEditor();
+      } catch (error) { verdict.textContent = (error as Error).message; selection.disabled = compare.disabled = merge.disabled = false; }
+    } }, 'Confirm same object and group');
+    selection.onchange = redraw;
+    appendLocalized(dialog, el('div', { class: 'photo-details-header' }, el('h2', {}, 'Group same object'), close),
+      el('p', {}, 'Select another detection of the same physical object. Objects seen separately in one photo cannot be grouped.'),
+      el('p', {}, 'AI comparison sends these saved photos to the configured service and incurs API usage. It never merges automatically.'),
+      el('p', {}, 'Conflicting tags retain the values of the current card. Separation restores the original cards.'),
+      candidates.length ? selection : el('p', {}, 'No compatible candidates from different photos'), preview, verdict, compare, merge);
+    redraw();
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog); dialog.showModal();
+  }
+
+  private async separateCandidateGroup(candidate: FeatureCandidate): Promise<void> {
+    const s = this.survey, originals = candidate.mergeSources;
+    if (!s || !originals?.length || !s.candidates.includes(candidate)) return;
+    try {
+      await surveyDb.replaceCandidateGroup([candidate.id], originals);
+      s.candidates = s.candidates.filter((c) => c.id !== candidate.id);
+      s.candidates.push(...structuredClone(originals));
+      this.recordPinUndo(s.id, { candidateId: candidate.id, label: 'Undo separation', group: { before: [structuredClone(candidate)], afterIds: originals.map((c) => c.id) } });
+      this.selectedFieldCandidateId = null;
+      this.mapView.setCandidates(s.candidates); this.mapView.setSelectedCandidate(null);
+      this.refreshCandidateEditor();
+    } catch (error) { toast((error as Error).message); }
+  }
+
   private async onDeleteCandidate(c: FeatureCandidate): Promise<void> {
     if (!this.survey) return;
     const undo: PinUndo = { candidateId: c.id, label: 'Undo delete pin', deleted: structuredClone(c),
@@ -2327,6 +2415,16 @@ class App {
     this.undoBusy = true;
     this.updateUndoButton();
     try {
+      if (entry.group) {
+        await surveyDb.replaceCandidateGroup(entry.group.afterIds, entry.group.before);
+        s.candidates = s.candidates.filter((c) => !entry.group!.afterIds.includes(c.id));
+        s.candidates.push(...structuredClone(entry.group.before));
+        history!.pop();
+        this.mapView.setCandidates(s.candidates);
+        this.refreshCandidateEditor();
+        toast(entry.label);
+        return;
+      }
       const current = s.candidates.find((c) => c.id === entry.candidateId);
       const restored = restorePinUndo(entry, current);
       if (restored) {

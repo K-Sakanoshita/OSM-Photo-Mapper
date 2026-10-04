@@ -343,13 +343,13 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       // observations, rebuild candidates from the merged set.
       const merged = [...res.observations.filter((o) => o.photoId !== 'p2'), ...retried.observations];
       const candidates = new SurveyAnalysisPipeline(retry).buildCandidates(survey, merged);
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0].observationIds).toHaveLength(2);
+      expect(candidates).toHaveLength(2);
+      expect(candidates.every((c) => c.observationIds.length === 1)).toBe(true);
     });
   });
 
   describe('cross-photo grouping', () => {
-    it('merges the same object seen from nearby cameras (proximity)', async () => {
+    it('requires reviewer grouping even for coincident projections', async () => {
       const p1 = makePhoto('p1', { cameraHeading: ch(90) });
       const p2 = makePhoto('p2', { cameraHeading: ch(90) });
       const survey = makeSurvey([p1, p2]);
@@ -357,9 +357,9 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       const analyzer = new FakeAnalyzer(() => obs());
       const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey);
       // Same camera position, same bearing, same distance -> identical
-      // projected point -> one cluster.
-      expect(res.candidates).toHaveLength(1);
-      expect(res.candidates[0].observationIds).toHaveLength(2);
+      // projected point is not sufficient identity evidence.
+      expect(res.candidates).toHaveLength(2);
+      expect(res.candidates.every((c) => c.observationIds.length === 1)).toBe(true);
     });
 
     it('keeps separate candidates for objects farther apart than the cluster radius', async () => {
@@ -376,7 +376,7 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       expect(res.candidates).toHaveLength(2);
     });
 
-    it('merges distant clusters whose crops are perceptually identical', async () => {
+    it('requires reviewer grouping for identical crops', async () => {
       const p1 = makePhoto('p1', { cameraHeading: ch(0) });
       const p2 = makePhoto('p2', { cameraHeading: ch(180) });
       const survey = makeSurvey([p1, p2]);
@@ -387,9 +387,9 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
         cropHasher: fixedHasher(() => HASH_A)
       });
       // Far apart in projection, but the CROPS look the same (identical
-      // perceptual hash) and the geometry agrees -> same object.
-      expect(res.candidates).toHaveLength(1);
-      expect(res.candidates[0].observationIds).toHaveLength(2);
+      // perceptual hash) and the geometry agrees, but identity still needs review.
+      expect(res.candidates).toHaveLength(2);
+      expect(res.candidates.every((c) => c.observationIds.length === 1)).toBe(true);
     });
   });
 
@@ -438,10 +438,10 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
   });
 
   describe('issue #2 blocker 2: cross-photo merges need a REAL visual match (crop hash)', () => {
-    it('merges clusters within the evidence radius even beyond the spatial radius', async () => {
+    it('does not auto merge visually identical nearby objects', async () => {
       // 25 m north vs 25 m south -> 50 m apart: beyond the 18 m spatial
       // radius but exactly at the 50 m evidence radius, and the crops
-      // are perceptually identical -> merged.
+      // are perceptually identical, but remain separately reviewable.
       const p1 = makePhoto('p1', { cameraHeading: ch(0) });
       const p2 = makePhoto('p2', { cameraHeading: ch(180) });
       const survey = makeSurvey([p1, p2]);
@@ -451,8 +451,8 @@ describe('SurveyAnalysisPipeline (issue #2)', () => {
       const res = await new SurveyAnalysisPipeline(analyzer).analyze(survey, {
         cropHasher: fixedHasher(() => HASH_A)
       });
-      expect(res.candidates).toHaveLength(1);
-      expect(res.candidates[0].observationIds).toHaveLength(2);
+      expect(res.candidates).toHaveLength(2);
+      expect(res.candidates.every((c) => c.observationIds.length === 1)).toBe(true);
     });
 
     it('does NOT merge when contradictory geometry puts the clusters beyond the evidence radius', async () => {

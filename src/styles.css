@@ -694,3 +694,7 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
 .analysis-spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid #cadbe5; border-top-color: var(--primary); border-radius: 50%; animation: analysis-spin 0.9s linear infinite; }
 @keyframes analysis-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .analysis-spinner { animation: none; } }
+
+.group-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.group-preview .evidence-photo { max-width: 100%; }
+@media (max-width: 480px) { .group-preview { grid-template-columns: 1fr; } }
