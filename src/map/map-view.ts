@@ -23,7 +23,9 @@ export class MapView {
   constructor(
     container: HTMLElement,
     private readonly onPinDragged?: (candidateId: string, lat: number, lon: number) => void,
-    private readonly onMapSelected?: (lat: number, lon: number) => void
+    private readonly onMapSelected?: (lat: number, lon: number) => void,
+    private readonly onCandidateSelected?: (candidateId: string) => void,
+    private readonly onPhotoSelected?: (photoId: string) => void
   ) {
     this.map = new maplibregl.Map({
       container,
@@ -78,6 +80,12 @@ export class MapView {
       (this.map.getSource(this.candidateSourceId) as maplibregl.GeoJSONSource).setData(this.candidateData);
 
       this.enableDragging();
+      this.map.on('click', this.photoLayerId, (e) => {
+        // Candidate and camera markers can overlap; the object pin wins.
+        if (this.map.queryRenderedFeatures(e.point, { layers: [this.candidateHitLayerId] }).length > 0) return;
+        const id = e.features?.[0]?.properties?.id as string | undefined;
+        if (id) this.onPhotoSelected?.(id);
+      });
     });
   }
 
@@ -146,19 +154,21 @@ export class MapView {
   private enableDragging(): void {
     /** Active drag state. Final coordinates come from here, not from an
      *  (async) source read at drop time. */
-    let drag: { id: string; lat: number; lon: number } | null = null;
+    let drag: { id: string; lat: number; lon: number; startX: number; startY: number; moved: boolean } | null = null;
 
-    const startDrag = (id: string, lat: number, lon: number): void => {
+    const startDrag = (id: string, lat: number, lon: number, point: { x: number; y: number }): void => {
       if (drag) return;
-      drag = { id, lat, lon };
+      drag = { id, lat, lon, startX: point.x, startY: point.y, moved: false };
       this.map.dragPan.disable();
       this.map.boxZoom.disable();
       this.map.touchZoomRotate.disable();
       this.map.getCanvas().style.cursor = 'grabbing';
     };
 
-    const moveDrag = (lng: number, lat: number): void => {
+    const moveDrag = (lng: number, lat: number, point: { x: number; y: number }): void => {
       if (!drag) return;
+      if (!drag.moved && Math.hypot(point.x - drag.startX, point.y - drag.startY) < 6) return;
+      drag.moved = true;
       drag.lon = lng;
       drag.lat = lat;
       const feature = this.candidateData.features.find((f) => f.properties?.id === drag?.id);
@@ -174,7 +184,8 @@ export class MapView {
       this.map.boxZoom.enable();
       this.map.touchZoomRotate.enable();
       this.map.getCanvas().style.cursor = '';
-      if (d) this.onPinDragged?.(d.id, d.lat, d.lon);
+      if (d?.moved) this.onPinDragged?.(d.id, d.lat, d.lon);
+      else if (d) this.onCandidateSelected?.(d.id);
     };
 
     const featureAt = (features: maplibregl.MapGeoJSONFeature[] | undefined) => features?.[0];
@@ -192,11 +203,11 @@ export class MapView {
       const id = feat?.properties?.id as string | undefined;
       if (id) {
         const [lon, lat] = (feat!.geometry as GeoJSON.Point).coordinates;
-        startDrag(id, lat, lon);
+        startDrag(id, lat, lon, e.point);
       }
     });
     this.map.on('mousemove', (e: maplibregl.MapMouseEvent) => {
-      if (drag) moveDrag(e.lngLat.lng, e.lngLat.lat);
+      if (drag) moveDrag(e.lngLat.lng, e.lngLat.lat, e.point);
     });
     this.map.on('mouseup', () => {
       if (drag) endDrag();
@@ -210,13 +221,13 @@ export class MapView {
       if (id) {
         e.preventDefault(); // stop the map from treating this touch as a pan
         const [lon, lat] = (feat!.geometry as GeoJSON.Point).coordinates;
-        startDrag(id, lat, lon);
+        startDrag(id, lat, lon, e.point);
       }
     });
     this.map.on('touchmove', (e: maplibregl.MapTouchEvent) => {
       if (!drag) return;
       const ll = e.lngLats?.[0] ?? e.lngLat;
-      moveDrag(ll.lng, ll.lat);
+      moveDrag(ll.lng, ll.lat, e.point);
     });
     this.map.on('touchend', () => {
       if (drag) endDrag();

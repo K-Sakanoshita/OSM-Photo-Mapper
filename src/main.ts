@@ -149,6 +149,8 @@ class App {
   private analyzing = false;
   private placingCandidate = false;
   private placingExistingCandidateId: string | null = null;
+  private selectedFieldCandidateId: string | null = null;
+  private selectedFieldPhotoId: string | null = null;
 
   /** Issue #2: batch analysis state.
    *  analyzerKind: which ImageObservationAnalyzer runs the batch.
@@ -209,7 +211,9 @@ class App {
     this.mapView = new MapView(
       document.getElementById('map') as HTMLElement,
       (id, lat, lon) => void this.onPinDragged(id, lat, lon),
-      (lat, lon) => void this.onMapSelected(lat, lon)
+      (lat, lon) => void this.onMapSelected(lat, lon),
+      (id) => void this.selectFieldCandidate(id),
+      (id) => void this.selectFieldPhoto(id)
     );
 
     // Issue #6: a persisted `recording=true` flag from a crashed session is
@@ -279,6 +283,10 @@ class App {
     document.body.dataset.mode = mode;
     this.title.textContent = title;
     this.backBtn.classList.toggle('hidden', mode === 'list');
+    if (mode !== 'survey') {
+      this.content.classList.remove('field-inspector', 'open');
+      this.content.style.bottom = '';
+    }
     this.updateRecBadge();
     if (mode !== 'survey') this.stopGpsStatus();
     requestAnimationFrame(() => this.mapView.map.resize());
@@ -411,6 +419,8 @@ class App {
     };
     await surveyDb.createSurvey(survey);
     this.survey = survey;
+    this.selectedFieldCandidateId = null;
+    this.selectedFieldPhotoId = null;
     this.tracker = null;
     this.mode = 'survey';
     // Issue #3: request orientation access at survey start (this is a
@@ -424,6 +434,8 @@ class App {
 
   private async openSurvey(survey: Survey): Promise<void> {
     this.survey = survey;
+    this.selectedFieldCandidateId = null;
+    this.selectedFieldPhotoId = null;
     // The tracker is runtime state: a restored survey is never actively
     // recording. Repair any stale persisted recording flag (issue #6).
     this.tracker = null;
@@ -541,9 +553,93 @@ class App {
       photoInput
     );
 
+    void this.renderFieldInspector();
+
     // Issue #10: keep the GPS readiness indicator live on the field
     // screen, independent of Record mode.
     this.startGpsStatus();
+  }
+
+  private selectFieldCandidate(id: string): void {
+    if (this.mode !== 'survey' || !this.survey?.candidates.some((c) => c.id === id)) return;
+    this.selectedFieldCandidateId = id;
+    this.selectedFieldPhotoId = null;
+    const candidate = this.survey.candidates.find((c) => c.id === id);
+    void this.renderFieldInspector().then(() => {
+      if (this.mode === 'survey' && candidate?.lat != null && candidate.lon != null) {
+        this.mapView.map.easeTo({ center: [candidate.lon, candidate.lat], offset: [0, -Math.round(window.innerHeight * 0.22)], duration: 250 });
+      }
+    });
+  }
+
+  private selectFieldPhoto(id: string): void {
+    if (this.mode !== 'survey' || !this.survey?.photos.some((p) => p.id === id)) return;
+    this.selectedFieldPhotoId = id;
+    this.selectedFieldCandidateId = null;
+    const photo = this.survey.photos.find((p) => p.id === id);
+    void this.renderFieldInspector().then(() => {
+      if (this.mode === 'survey' && photo?.gps) {
+        this.mapView.map.easeTo({ center: [photo.gps.lon, photo.gps.lat], offset: [0, -Math.round(window.innerHeight * 0.22)], duration: 250 });
+      }
+    });
+  }
+
+  private async renderFieldInspector(): Promise<void> {
+    const s = this.survey;
+    if (this.mode !== 'survey' || !s) return;
+    const previousScroll = this.content.querySelector<HTMLElement>('.field-details')?.scrollTop ?? 0;
+    const observations = await surveyDb.listObservations(s.id);
+    if (this.mode !== 'survey' || this.survey?.id !== s.id) return;
+    const photoByObs = this.photosForObservations(s, observations);
+    const obsById = new Map(observations.map((obs) => [obs.id, obs]));
+    const candidate = s.candidates.find((c) => c.id === this.selectedFieldCandidateId);
+    const photo = s.photos.find((p) => p.id === this.selectedFieldPhotoId);
+    const open = !!candidate || !!photo;
+    const strip = el('div', { class: 'field-strip' },
+      el('span', { class: 'field-strip-title' }, `Photos (${s.photos.length})`),
+      ...s.photos.map((p, index) => el('button', {
+        class: 'field-photo-button' + (photo?.id === p.id ? ' selected' : ''),
+        'aria-label': `Open photo ${index + 1}`,
+        onclick: () => this.selectFieldPhoto(p.id)
+      }, p.image ? el('img', { src: p.image, alt: '' }) : `Photo ${index + 1}`)),
+      ...s.candidates.map((c, index) => el('button', {
+        class: 'btn small' + (candidate?.id === c.id ? ' selected' : ''),
+        onclick: () => this.selectFieldCandidate(c.id)
+      }, `${index + 1}: ${getFeatureClass(c.featureType)?.label ?? c.featureType}`)),
+      ...(open ? [el('button', { class: 'btn small', 'aria-label': 'Close inspector', onclick: () => {
+        this.selectedFieldCandidateId = null;
+        this.selectedFieldPhotoId = null;
+        void this.renderFieldInspector();
+      } }, 'Close')]: [])
+    );
+    const details = el('div', { class: 'field-details' });
+    if (candidate) {
+      if (candidate.analyzer !== 'openai' && candidate.analyzer !== 'manual') {
+        details.append(el('div', { class: 'demo-banner' }, 'MOCK / DEMO RESULT or unverified legacy analysis — export disabled'));
+      }
+      details.append(this.buildCandidateCard(candidate, photoByObs, obsById));
+    } else if (photo) {
+      const related = s.candidates.filter((c) => c.observationIds.some((id) => obsById.get(id)?.photoId === photo.id));
+      details.append(
+        el('div', { class: 'candidate' },
+          el('div', { class: 'head' }, el('strong', {}, 'Photo')),
+          ...(photo.image ? [el('img', { class: 'field-photo-full', src: photo.image, alt: 'Captured source photo' })] : []),
+          el('div', { class: 'row' }, `Captured: ${new Date(photo.timestamp).toLocaleString()} (${photo.timestampSource ?? 'unknown time source'})`),
+          el('div', { class: 'row' }, photo.cameraPosition
+            ? `Camera: ${describeCameraPosition(photo.cameraPosition)} @ ${photo.cameraPosition.lat.toFixed(5)}, ${photo.cameraPosition.lon.toFixed(5)}`
+            : 'Camera: no GPS'),
+          el('div', { class: 'row' }, `Note: ${photo.note || 'none'}`),
+          el('div', { class: 'row' }, `Associated candidates: ${related.length}`),
+          ...related.map((c) => el('button', { class: 'btn small', onclick: () => this.selectFieldCandidate(c.id) },
+            getFeatureClass(c.featureType)?.label ?? c.featureType))
+        )
+      );
+    }
+    this.content.classList.add('field-inspector');
+    this.content.classList.toggle('open', open);
+    this.content.style.bottom = `${this.bottombar.getBoundingClientRect().height}px`;
+    this.content.replaceChildren(strip, details);
+    details.scrollTop = previousScroll;
   }
 
   private async toggleRecording(): Promise<void> {
@@ -1473,6 +1569,7 @@ class App {
       el('div', { class: 'head' }, thumb, el('div', { class: 'type' }, cls?.label ?? (c.analyzer === 'manual' ? 'Custom tags' : c.featureType)), statusSel)
     );
     card.append(el('div', { class: 'row' }, `Source: ${c.analyzer === 'openai' ? `OpenAI / ${c.analyzerModel ?? 'model unknown'}` : c.analyzer === 'manual' ? 'Placed manually on map' : c.analyzer === 'mock' ? 'Mock (fabricated)' : 'Unverified or mixed source'}`));
+    if (c.analyzer === 'manual') card.append(el('div', { class: 'row' }, 'No source photo — manually placed candidate'));
     if (c.analyzer === 'manual') {
       const classSelect = el('select', { 'aria-label': 'Feature type', onchange: () => void this.onManualClassChanged(c, classSelect) },
         el('option', { value: 'manual' }, 'Custom tags'),
@@ -1556,7 +1653,7 @@ class App {
         ? ' unknown — camera GPS locates the photo, not the photographed object. '
         : ' unknown — no usable camera GPS was read from the photo. ');
     }
-    posRow.append(el('button', { class: 'btn small', onclick: () => {
+    if (this.mode === 'review') posRow.append(el('button', { class: 'btn small', onclick: () => {
       this.placingCandidate = false;
       this.placingExistingCandidateId = this.placingExistingCandidateId === c.id ? null : c.id;
       if (c.lat == null || c.lon == null) {
@@ -1875,7 +1972,10 @@ class App {
         await surveyDb.updateCandidate(candidate);
       }
       this.mapView.map.jumpTo({ center: [restored.cameraPosition!.lon, restored.cameraPosition!.lat], zoom: 18 });
-      await this.renderReviewScreen(true);
+      this.mapView.setPhotos(s.photos);
+      this.mapView.setCandidates(s.candidates);
+      if (this.mode === 'review') await this.renderReviewScreen(true);
+      else if (this.mode === 'survey') await this.renderFieldInspector();
       toast(observations.some((obs) => obs.photoId === photo.id)
         ? 'Photo GPS restored. Check the candidate pin before uploading.'
         : 'Photo GPS restored. Re-run analysis or place the object pin manually.');
@@ -1908,6 +2008,14 @@ class App {
 
   /* ---------------- review actions ---------------- */
 
+  private refreshCandidateEditor(): void {
+    if (this.mode === 'review') void this.renderReviewScreen(true);
+    else if (this.mode === 'survey') {
+      if (this.survey) this.mapView.setCandidates(this.survey.candidates);
+      void this.renderFieldInspector();
+    }
+  }
+
   private async onStatusChange(c: FeatureCandidate, sel: HTMLSelectElement): Promise<void> {
     c.status = sel.value as CandidateStatus;
     if (c.status !== 'existing') {
@@ -1915,13 +2023,13 @@ class App {
       c.linkedOsmType = undefined;
     }
     await surveyDb.updateCandidate(c);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   private async onRemoveTag(c: FeatureCandidate, key: string): Promise<void> {
     delete c.tags[key];
     await surveyDb.updateCandidate(c);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   private async onEditTag(c: FeatureCandidate, key: string): Promise<void> {
@@ -1931,7 +2039,7 @@ class App {
     if (val) c.tags[key] = val;
     else delete c.tags[key];
     await surveyDb.updateCandidate(c);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   private buildAddTagRow(c: FeatureCandidate): HTMLElement {
@@ -1955,7 +2063,7 @@ class App {
     }
     c.tags[k] = v;
     await surveyDb.updateCandidate(c);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   /** Add one reviewer-confirmed suggested (optional) tag. */
@@ -1965,14 +2073,14 @@ class App {
     if (v === '') delete c.tags[key];
     else c.tags[key] = v;
     await surveyDb.updateCandidate(c);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   private async onAddSuggestedTag(c: FeatureCandidate, k: string, v: string): Promise<void> {
     c.tags[k] = v;
     await surveyDb.updateCandidate(c);
     toast(`${k}=${v} added`);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   /** Full tag set that will be written: existing object tags + candidate tags + name.
@@ -2008,7 +2116,7 @@ class App {
     c.warnings = c.warnings.filter((warning) => !warning.startsWith('No usable camera GPS position for this observation.'));
     await surveyDb.updateCandidate(c);
     this.mapView.setCandidates(s.candidates);
-    if (this.mode === 'review') void this.renderReviewScreen(true);
+    this.refreshCandidateEditor();
     toast('Pin moved');
   }
 
@@ -2038,14 +2146,16 @@ class App {
     c.featureType = select.value;
     c.tags = cls?.autoTag ? { ...cls.requiredTags } : {};
     await surveyDb.updateCandidate(c);
-    this.render();
+    this.refreshCandidateEditor();
   }
 
   private async onDeleteManualCandidate(c: FeatureCandidate): Promise<void> {
     if (!this.survey || c.analyzer !== 'manual') return;
     await surveyDb.deleteCandidate(c.id);
     this.survey.candidates = this.survey.candidates.filter((item) => item.id !== c.id);
-    this.render();
+    if (this.selectedFieldCandidateId === c.id) this.selectedFieldCandidateId = null;
+    this.mapView.setCandidates(this.survey.candidates);
+    this.refreshCandidateEditor();
   }
 
   /** Issue #9: apply the OSM mapping chosen for a review-only candidate. */
@@ -2053,7 +2163,7 @@ class App {
     const all = mappingsFor(c.featureType);
     c.tags = applyMappingToTags(c.tags, m, all.length > 0 ? all : [m]);
     await surveyDb.updateCandidate(c);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   /** Issue #8: discard the aerial refinement — the ground-survey
@@ -2068,7 +2178,7 @@ class App {
     ps.refinementApplied = false;
     await surveyDb.updateCandidate(c);
     this.mapView.setCandidates(s.candidates);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
     toast('Reverted to ground-survey estimate');
   }
 
@@ -2082,7 +2192,7 @@ class App {
     ps.refinementApplied = true;
     await surveyDb.updateCandidate(c);
     this.mapView.setCandidates(s.candidates);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
     toast('Aerial-refined position applied');
   }
 
@@ -2092,7 +2202,7 @@ class App {
     c.status = 'existing';
     await surveyDb.updateCandidate(c);
     toast(`Linked to ${m.osmType}/${m.osmId}`);
-    if (this.mode === 'review') this.render();
+    this.refreshCandidateEditor();
   }
 
   /* ---------------- upload review screen ---------------- */

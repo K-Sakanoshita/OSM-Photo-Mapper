@@ -35,6 +35,7 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  position: relative;
 }
 
 /* ---------- Header ---------- */
@@ -164,6 +165,29 @@ body[data-mode='upload'] #content { display: block; }
 /* Issue #2: the analysis screen renders into #content — it must be
    visible in analysis mode (was missing, making the screen blank). */
 body[data-mode='analysis'] #content { display: block; }
+body[data-mode='survey'] #content.field-inspector {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--bar-h);
+  z-index: 6;
+  flex: none;
+  height: auto;
+  max-height: 70dvh;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.18);
+}
+body[data-mode='survey'] #content.field-inspector.open { height: min(52dvh, 520px); }
+.field-strip { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 6px 10px; white-space: nowrap; background: #fff; }
+.field-strip-title { font-size: 12px; font-weight: 700; flex: 0 0 auto; }
+.field-photo-button { flex: 0 0 auto; width: 42px; height: 42px; padding: 0; border: 2px solid #cbd5dc; border-radius: 7px; background: #eef2f5; overflow: hidden; }
+.field-photo-button img { width: 100%; height: 100%; object-fit: cover; }
+.field-strip .selected, .field-photo-button.selected { border-color: var(--primary); background: #e7f2f8; }
+.field-details { height: calc(100% - 54px); overflow-y: auto; overflow-x: hidden; padding: 8px 10px 18px; }
+.field-photo-full { display: block; max-width: 100%; max-height: 45dvh; margin: 8px auto; object-fit: contain; }
 /* Issue #13 phase 2: the camera screen stacks video + status + shutter. */
 body[data-mode='camera'] #content { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 
@@ -212,6 +236,16 @@ body[data-mode='camera'] #content { display: flex; flex-direction: column; align
   background: #fff;
 }
 .note-input:focus { outline: 2px solid var(--accent); }
+
+@media (max-width: 600px) {
+  body[data-mode='survey'] #bottombar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+  }
+  body[data-mode='survey'] #bottombar .btn { padding: 8px 3px; font-size: 12px; justify-content: center; }
+  body[data-mode='survey'] #bottombar .note-input { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+}
 
 /* ---------- Survey list ---------- */
 
