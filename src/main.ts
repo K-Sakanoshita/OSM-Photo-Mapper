@@ -40,6 +40,7 @@ import { refinePosition } from './analysis/structural-refine';
 import { decideSnap } from './analysis/snap-decision';
 import { distanceMeters, estimatePosition, rayFromPhoto } from './analysis/position';
 import { mergeCandidateWithOsm } from './osm/merge-candidate';
+import { pinUndoBefore, restorePinUndo, type PinUndo } from './map/pin-undo';
 import { selectProvider } from './imagery/providers';
 import type {
   CandidateStatus,
@@ -152,6 +153,9 @@ class App {
   private placingExistingCandidateId: string | null = null;
   private selectedFieldCandidateId: string | null = null;
   private selectedFieldPhotoId: string | null = null;
+  private pinHistory = new Map<string, PinUndo[]>();
+  private undoBusy = false;
+  private undoButton: HTMLButtonElement;
 
   /** Issue #2: batch analysis state.
    *  analyzerKind: which ImageObservationAnalyzer runs the batch.
@@ -202,7 +206,8 @@ class App {
     // Issue #10: GPS readiness strip — visible on the survey screen
     // regardless of Record mode, so missing GPS is never silent.
     this.gpsStatus = el('div', { id: 'gps-status', class: 'gps-status hidden', role: 'status' });
-    const mapWrap = el('div', { id: 'map-wrap' }, el('div', { id: 'map' }), this.recBadge, this.gpsStatus);
+    this.undoButton = el('button', { class: 'btn pin-undo', disabled: true, onclick: () => void this.undoPinEdit() }, 'Undo');
+    const mapWrap = el('div', { id: 'map-wrap' }, el('div', { id: 'map' }), this.recBadge, this.gpsStatus, this.undoButton);
 
     this.content = el('div', { id: 'content' });
     this.bottombar = el('div', { id: 'bottombar' });
@@ -289,6 +294,7 @@ class App {
       this.content.style.bottom = '';
     }
     this.updateRecBadge();
+    this.updateUndoButton();
     if (mode !== 'survey') this.stopGpsStatus();
     requestAnimationFrame(() => this.mapView.map.resize());
   }
@@ -1077,6 +1083,7 @@ class App {
       result.candidates.push(...fresh.candidates.filter((c) => c.analyzer === 'manual'));
       await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
       fresh.candidates = result.candidates;
+      this.pinHistory.delete(fresh.id);
       this.survey = fresh;
       this.analysisResult = result;
       this.stopRecordingNow();
@@ -2117,6 +2124,7 @@ class App {
       await this.onLinkExisting(c, target);
       return;
     }
+    const undo = pinUndoBefore(c);
     c.lat = lat;
     c.lon = lon;
     c.positionConfidence = Math.min(c.positionConfidence, 0.3);
@@ -2125,6 +2133,7 @@ class App {
     }
     c.warnings = c.warnings.filter((warning) => !warning.startsWith('No usable camera GPS position for this observation.'));
     await surveyDb.updateCandidate(c);
+    this.recordPinUndo(s.id, undo);
     this.mapView.setCandidates(s.candidates);
     this.refreshCandidateEditor();
     toast('Pin moved');
@@ -2148,6 +2157,7 @@ class App {
     };
     await surveyDb.updateCandidate(c);
     s.candidates.push(c);
+    this.recordPinUndo(s.id, { candidateId: c.id, label: 'Undo add pin' });
     this.render();
   }
 
@@ -2207,11 +2217,64 @@ class App {
   }
 
   private async onLinkExisting(c: FeatureCandidate, m: OsmMatch): Promise<void> {
+    const undo = pinUndoBefore(c, true);
     mergeCandidateWithOsm(c, m);
     await surveyDb.updateCandidate(c);
+    this.recordPinUndo(c.surveyId, undo);
     if (this.survey) this.mapView.setCandidates(this.survey.candidates);
     toast(`Merged with ${m.osmType}/${m.osmId}`);
     this.refreshCandidateEditor();
+  }
+
+  private recordPinUndo(surveyId: string, entry: PinUndo): void {
+    const history = this.pinHistory.get(surveyId) ?? [];
+    history.push(entry);
+    if (history.length > 50) history.shift();
+    this.pinHistory.set(surveyId, history);
+    this.updateUndoButton();
+  }
+
+  private updateUndoButton(): void {
+    const history = this.survey ? this.pinHistory.get(this.survey.id) : undefined;
+    this.undoButton.hidden = this.mode !== 'review' && this.mode !== 'survey';
+    this.undoButton.disabled = this.undoBusy || !history?.length;
+    this.undoButton.textContent = history?.[history.length - 1]?.label ?? 'Undo';
+  }
+
+  private async undoPinEdit(): Promise<void> {
+    const s = this.survey;
+    const history = s && this.pinHistory.get(s.id);
+    const entry = history?.[history.length - 1];
+    if (!s || !entry || this.undoBusy) return;
+    this.undoBusy = true;
+    this.updateUndoButton();
+    try {
+      const current = s.candidates.find((c) => c.id === entry.candidateId);
+      if (current) {
+        const restored = restorePinUndo(entry, current);
+        if (restored) {
+          await surveyDb.updateCandidate(restored);
+          s.candidates = s.candidates.map((c) => c.id === restored.id ? restored : c);
+        } else {
+          await surveyDb.deleteCandidate(current.id);
+          s.candidates = s.candidates.filter((c) => c.id !== current.id);
+          if (this.selectedFieldCandidateId === current.id) this.selectedFieldCandidateId = null;
+        }
+      }
+      history!.pop();
+      this.placingCandidate = false;
+      this.placingExistingCandidateId = null;
+      if (this.survey?.id === s.id) {
+        this.mapView.setCandidates(s.candidates);
+        this.refreshCandidateEditor();
+      }
+      toast(entry.label);
+    } catch (error) {
+      toast(`Undo failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.undoBusy = false;
+      this.updateUndoButton();
+    }
   }
 
   /* ---------------- upload review screen ---------------- */
