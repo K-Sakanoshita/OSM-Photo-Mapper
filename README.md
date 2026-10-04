@@ -209,7 +209,7 @@ Structured Outputs を利用し、想定外の自由形式レスポンスをそ�
 
 ### POI の二段階認識
 
-POI の大分類と小分類は [`src/analysis/poi-catalog.json`](src/analysis/poi-catalog.json) に定義しています。OSM Wiki のタグ説明と Taginfo の使用状況を参照した主要項目の抜粋であり、OSM タグ全体を網羅するものではありません。設定ファイル内に各分類の参照 URL を記載しています。
+POI の大分類と小分類は [`data/poi-catalog.json`](data/poi-catalog.json) に定義しています。OSM Wiki のタグ説明と Taginfo の使用状況を参照した主要項目の抜粋であり、OSM タグ全体を網羅するものではありません。設定ファイル内に各分類の参照 URL を記載しています。
 
 初回の写真解析では大分類の ID・名称だけを送ります。モデルが `playground` と `visualType=swing` のように明確な種類を返し、設定のキーワードと一意に一致すれば、アプリ側で `playground=swing` に対応付けて完了します。曖昧な物体がある場合だけ、同じ写真の `previous_response_id` と該当大分類の小分類 ID・名称を使って追加問い合わせをします。追加リクエストには画像データを再添付しません。前回の画像を含む文脈の入力トークンは課金対象です。
 

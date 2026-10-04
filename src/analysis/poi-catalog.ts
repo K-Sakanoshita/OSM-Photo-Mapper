@@ -1,4 +1,4 @@
-import rawCatalog from './poi-catalog.json';
+import rawCatalog from '../../data/poi-catalog.json';
 import type { GeometryPreference } from './feature-classes';
 
 /** Curated, versioned POI vocabulary. It is bundled with the app; only the
