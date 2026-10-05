@@ -400,7 +400,13 @@
     "Pin": "ピン",
     "Related photos": "関連写真",
     "Object pins": "対象物のピン",
-    "Analysis failed": "解析失敗"
+    "Analysis failed": "解析失敗",
+    "No camera was found on this device.": "この端末にカメラが見つかりません。",
+    "Camera access was denied. Allow camera access in your browser settings.": "カメラへのアクセスが許可されていません。ブラウザの設定でカメラを許可してください。",
+    "The camera cannot be used. Close other apps using it and try again.": "カメラを使用できません。カメラを使用中の他のアプリを閉じて、もう一度お試しください。",
+    "This camera does not support the requested capture settings.": "このカメラは指定された撮影設定に対応していません。",
+    "The camera could not be started. Check the connection and browser permissions.": "カメラを起動できません。接続とブラウザのカメラ権限を確認してください。",
+    "Camera not ready": "カメラの準備ができていません"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

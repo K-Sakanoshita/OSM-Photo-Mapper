@@ -19,7 +19,7 @@ import { POSITION_QUALITY_LABEL } from './types';
 import { livePhotoLimitState } from './capture/photo-limit';
 import { capturePhoto, restorePhotoGps } from './capture/photo';
 import { pickPhotoFile, pickPhotoFiles, supportsPhotoFilePicker } from './capture/photo-picker';
-import { InAppCamera } from './capture/inapp-camera';
+import { InAppCamera, cameraErrorMessage } from './capture/inapp-camera';
 import {
   requestOneShotFix,
   withTimeout,
@@ -907,7 +907,7 @@ class App {
     try {
       await this.inappCamera.start(video);
     } catch (e) {
-      toast(`In-app camera unavailable: ${(e as Error).message}`);
+      toast(cameraErrorMessage(e));
       this.stopInAppCamera();
       this.mode = 'survey';
       this.render();

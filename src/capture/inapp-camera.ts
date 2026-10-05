@@ -99,3 +99,15 @@ export class InAppCamera {
     }
   }
 }
+
+/** Browser error text varies by vendor; use the stable exception name. */
+export function cameraErrorMessage(error: unknown): string {
+  const name = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
+  switch (name) {
+    case 'NotFoundError': case 'DevicesNotFoundError': return 'No camera was found on this device.';
+    case 'NotAllowedError': case 'PermissionDeniedError': case 'SecurityError': return 'Camera access was denied. Allow camera access in your browser settings.';
+    case 'NotReadableError': case 'TrackStartError': return 'The camera cannot be used. Close other apps using it and try again.';
+    case 'OverconstrainedError': return 'This camera does not support the requested capture settings.';
+    default: return 'The camera could not be started. Check the connection and browser permissions.';
+  }
+}
