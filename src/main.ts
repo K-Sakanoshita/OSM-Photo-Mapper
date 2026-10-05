@@ -15,6 +15,7 @@ import { tagKeys, tagValues } from './map/tag-options';
 import { GeolocationTracker } from './capture/geolocation-tracker';
 import { OrientationTracker } from './capture/orientation';
 import { POSITION_QUALITY_LABEL } from './types';
+import { livePhotoLimitState } from './capture/photo-limit';
 import { capturePhoto, restorePhotoGps } from './capture/photo';
 import { pickPhotoFile, pickPhotoFiles, supportsPhotoFilePicker } from './capture/photo-picker';
 import { InAppCamera } from './capture/inapp-camera';
@@ -140,6 +141,7 @@ class App {
   private title: HTMLElement;
   private backBtn: HTMLElement;
 
+  private photoCaptureBusy = false;
   private mode: Mode = 'list';
   private survey: Survey | null = null;
   private tracker: GeolocationTracker | null = null;
@@ -556,7 +558,7 @@ class App {
     // at the shutter moment (only offered where getUserMedia exists).
     const inappBtn = el(
       'button',
-      { class: 'btn', disabled: !InAppCamera.available(), onclick: () => void this.openInAppCamera() },
+      { id: 'live-camera-btn', class: 'btn', disabled: !InAppCamera.available() || livePhotoLimitState(s.captureMode, s.photos.length).full, onclick: () => void this.openInAppCamera() },
       '📸 In-app'
     );
 
@@ -567,6 +569,7 @@ class App {
       photoInput
     );
 
+    this.updateLivePhotoLimit();
     void this.renderFieldInspector();
 
     // Issue #10: keep the GPS readiness indicator live on the field
@@ -779,13 +782,14 @@ class App {
 
   private async onPhotoFile(file: File, selectionMethod: 'file-system-access' | 'file-input' = 'file-input'): Promise<void> {
     const s = this.survey;
-    if (!s) return;
+    if (!s || !this.canCapturePhoto()) return;
     if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?)$/i.test(file.name)) {
       toast('Select an image file');
       return;
     }
 
     const noteEl = this.bottombar.querySelector<HTMLInputElement>('#photo-note');
+    this.photoCaptureBusy = true;
     try {
       // Issue #10: the one-shot fix was started in the SAME user gesture as
       // the file input (see the photo button handler). Give it a bounded
@@ -824,12 +828,45 @@ class App {
       // Issue #3/#13: the toast states the timestamp source, position
       // provenance, and the bearing outcome (or why it is missing) — a
       // silent evidence gap would hide the loss.
-      toast(this.describePhotoCaptured(photo, s.photos.length));
+      this.notifyPhotoCaptured(photo, s.photos.length);
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
       if (mapBtn) mapBtn.disabled = false;
     } catch (e) {
       toast(`Photo failed: ${(e as Error).message}`);
+    } finally {
+      this.photoCaptureBusy = false;
+      this.updateLivePhotoLimit();
     }
+  }
+
+  private canCapturePhoto(): boolean {
+    if (!this.survey || this.photoCaptureBusy) return false;
+    if (livePhotoLimitState(this.survey.captureMode, this.survey.photos.length).full) {
+      toast('Live photo limit reached (30). Save the photos from the survey list and start a new survey.');
+      return false;
+    }
+    return true;
+  }
+
+  private notifyPhotoCaptured(photo: Photo, count: number): void {
+    const state = livePhotoLimitState(this.survey?.captureMode, count);
+    toast(state.full ? 'Live photo limit reached (30). Save the photos from the survey list and start a new survey.'
+      : state.warn ? t('Live photos: {count}/30. Remaining: {remaining}. Save the photos and start a new survey soon.').replace('{count}', String(count)).replace('{remaining}', String(state.remaining))
+      : this.describePhotoCaptured(photo, count));
+  }
+
+  private updateLivePhotoLimit(): void {
+    this.bottombar.querySelector('.live-photo-limit')?.remove();
+    const survey = this.survey;
+    if (!survey) return;
+    const state = livePhotoLimitState(survey.captureMode, survey.photos.length);
+    for (const id of ['live-camera-btn', 'os-camera-btn']) {
+      const button = this.bottombar.querySelector<HTMLButtonElement>(`#${id}`);
+      if (button) button.disabled = state.full || (id === 'live-camera-btn' && !InAppCamera.available());
+    }
+    if (state.warn) this.bottombar.append(el('div', { class: 'live-photo-limit', role: 'status' },
+      state.full ? 'Live photo limit reached (30). Save the photos from the survey list and start a new survey.'
+        : t('Live photos: {count}/30. Remaining: {remaining}. Save the photos and start a new survey soon.').replace('{count}', String(survey.photos.length)).replace('{remaining}', String(state.remaining))));
   }
 
   /** Shared post-capture toast (issue #3): states the timestamp source,
@@ -858,7 +895,7 @@ class App {
    *  one-shot GPS fix, and the camera permission. */
   private async openInAppCamera(): Promise<void> {
     const s = this.survey;
-    if (!s || this.inappCamera.active) return;
+    if (!s || this.inappCamera.active || !this.canCapturePhoto()) return;
     this.orientationTracker.start();
     this.inappFix = requestOneShotFix(15_000);
     this.mode = 'camera';
@@ -909,6 +946,7 @@ class App {
       'button',
       {
         id: 'shutter-btn',
+        disabled: livePhotoLimitState(s.captureMode, s.photos.length).full,
         class: 'shutter-btn',
         'aria-label': 'Capture photo',
         onclick: () => void this.onInAppShutter()
@@ -928,6 +966,8 @@ class App {
     const osCamBtn = el(
       'button',
       {
+        id: 'os-camera-btn',
+        disabled: livePhotoLimitState(s.captureMode, s.photos.length).full,
         class: 'btn',
         onclick: () => {
           this.pendingFix = requestOneShotFix(15_000);
@@ -960,6 +1000,7 @@ class App {
       el('div', { id: 'camera-photos' }, this.buildPhotoGallery(s.photos))
     );
     this.bottombar.replaceChildren(osCamBtn, mapBtn, photoInput);
+    this.updateLivePhotoLimit();
   }
 
   /** Shutter gesture (issue #13 phase 2): timestamp, orientation reading
@@ -970,7 +1011,8 @@ class App {
    *  the shutter is never held hostage by a slow GPS lock. */
   private async onInAppShutter(): Promise<void> {
     const s = this.survey;
-    if (!s) return;
+    if (!s || !this.canCapturePhoto()) return;
+    this.photoCaptureBusy = true;
     const btn = this.content.querySelector<HTMLButtonElement>('#shutter-btn');
     if (btn) btn.disabled = true;
     try {
@@ -997,13 +1039,15 @@ class App {
       this.selectedFieldCandidateId = null;
       this.content.querySelector('#camera-photos')?.replaceChildren(this.buildPhotoGallery(s.photos));
       this.mapView.setPhotos(s.photos);
-      toast(this.describePhotoCaptured(photo, s.photos.length));
+      this.notifyPhotoCaptured(photo, s.photos.length);
       const mapBtn = this.bottombar.querySelector<HTMLButtonElement>('#map-btn');
       if (mapBtn) mapBtn.disabled = false;
     } catch (e) {
       toast(`Photo failed: ${(e as Error).message}`);
     } finally {
-      if (btn) btn.disabled = false;
+      this.photoCaptureBusy = false;
+      if (btn) btn.disabled = livePhotoLimitState(s.captureMode, s.photos.length).full;
+      this.updateLivePhotoLimit();
     }
   }
 

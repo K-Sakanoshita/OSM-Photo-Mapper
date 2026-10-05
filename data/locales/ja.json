@@ -386,7 +386,9 @@
     "Download failed": "ダウンロードに失敗しました",
     "No photos to download": "保存できる写真がありません",
     "Stored photo format cannot be downloaded": "保存された写真の形式をダウンロードできません",
-    "Survey not found": "サーベイが見つかりません"
+    "Survey not found": "サーベイが見つかりません",
+    "Live photo limit reached (30). Save the photos from the survey list and start a new survey.": "ライブモードの上限30枚に達しました。サーベイ一覧から写真を保存し、新しいサーベイを開始してください。",
+    "Live photos: {count}/30. Remaining: {remaining}. Save the photos and start a new survey soon.": "写真 {count}/30枚（残り{remaining}枚）。区切りのよいところで写真を保存し、新しいサーベイを開始してください。"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",
