@@ -1,7 +1,7 @@
 import { t } from '../i18n';
 
 /** Open the original image in an independent, touch-friendly modal. */
-export function openPhotoViewer(source: string): void {
+export function openPhotoViewer(source: string, detectionBoxes: readonly HTMLElement[] = []): void {
   const dialog = document.createElement('dialog');
   dialog.className = 'photo-viewer';
   dialog.setAttribute('aria-label', t('Enlarged photo'));
@@ -13,10 +13,23 @@ export function openPhotoViewer(source: string): void {
   image.src = source;
   image.alt = t('Enlarged photo');
   image.draggable = false;
-  stage.append(image);
+  const canvas = document.createElement('div');
+  canvas.className = 'photo-viewer-canvas';
+  canvas.append(image);
+  for (const box of detectionBoxes) canvas.append(box.cloneNode(true));
+  stage.append(canvas);
+  const fit = () => {
+    if (!image.naturalWidth || !image.naturalHeight) return;
+    const ratio = Math.min(stage.clientWidth / image.naturalWidth, stage.clientHeight / image.naturalHeight);
+    canvas.style.width = `${image.naturalWidth * ratio}px`;
+    canvas.style.height = `${image.naturalHeight * ratio}px`;
+  };
+  image.addEventListener('load', fit);
+  const resize = new ResizeObserver(fit);
+  resize.observe(stage);
   let scale = 1, x = 0, y = 0;
   const pointers = new Map<number, { x: number; y: number }>();
-  const render = () => { image.style.transform = `translate(${x}px, ${y}px) scale(${scale})`; };
+  const render = () => { canvas.style.transform = `translate(${x}px, ${y}px) scale(${scale})`; };
   const zoom = (factor: number, pointX = 0, pointY = 0) => {
     const next = Math.max(1, Math.min(8, scale * factor));
     const ratio = next / scale;
@@ -79,7 +92,7 @@ export function openPhotoViewer(source: string): void {
     zoom(Math.exp(-event.deltaY * 0.002), event.clientX - c.x, event.clientY - c.y);
   }, { passive: false });
   stage.addEventListener('dblclick', () => scale > 1 ? (scale = 1, x = y = 0, render()) : zoom(2));
-  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  dialog.addEventListener('close', () => { resize.disconnect(); dialog.remove(); }, { once: true });
   document.body.append(dialog);
   dialog.showModal();
 }
@@ -89,7 +102,11 @@ export function enablePhotoViewer(image: HTMLImageElement): void {
   const parentButton = image.closest('button');
   if (!parentButton) { image.tabIndex = 0; image.setAttribute('role', 'button'); }
   image.setAttribute('aria-label', t('Enlarge photo'));
-  const open = (event: Event) => { if (!parentButton) event.stopPropagation(); openPhotoViewer(image.src); };
+  const open = (event: Event) => {
+    if (!image.closest('button')) event.stopPropagation();
+    const boxes = [...(image.closest('.evidence-photo')?.querySelectorAll<HTMLElement>('.evidence-box') ?? [])];
+    openPhotoViewer(image.src, boxes);
+  };
   image.addEventListener('click', open);
   image.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(event); }
