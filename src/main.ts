@@ -29,7 +29,7 @@ import {
 } from './capture/camera-position';
 import { surveyDb } from './db/survey-db';
 import { canGroupCandidates, groupEvidence, mergeCandidateGroup } from './analysis/candidate-group';
-import { SurveyAnalysisPipeline } from './analysis/pipeline';
+import { buildCandidate, SurveyAnalysisPipeline } from './analysis/pipeline';
 import { BrowserVision } from './analysis/browser-vision/client';
 import { BROWSER_VISION_VERSION, browserVisionConfig, requiresPhotoReview } from './analysis/browser-vision/policy';
 import { OpenAIVisionAnalyzer } from './analysis/openai-analyzer';
@@ -1590,10 +1590,43 @@ class App {
         el('div', { class: 'photo-frame photo-thumbnail' },
           el('button', { class: 'field-photo-button', 'aria-label': 'Photo details', onclick: () => this.showPhotoDetails(photo) },
             photo.image ? el('img', { src: photo.image, alt: 'Captured source photo' }) : 'Photo'),
-          this.photoDetailsButton(photo, true)
+          this.photoDetailsButton(photo, true),
+          el('button', { class: 'btn small photo-pin-action', disabled: this.analyzing, onclick: (event) => { event.stopPropagation(); void this.placePhotoPins(photo); } }, 'Place or restore pins')
         )
       ))
     );
+  }
+
+  private async placePhotoPins(photo: Photo): Promise<void> {
+    const survey = this.survey;
+    if (!survey || this.analyzing) return;
+    try {
+      const observations = (await surveyDb.listObservations(survey.id)).filter((obs) => obs.photoId === photo.id);
+      if (this.survey !== survey) return;
+      const represented = new Set(survey.candidates.flatMap((candidate) => candidate.observationIds));
+      for (const observation of observations.filter((obs) => !represented.has(obs.id))) {
+        const candidate = buildCandidate(survey, observation.featureType, [observation]);
+        candidate.analyzer = observation.analyzer ?? 'mixed';
+        candidate.analyzerModel = observation.analyzerModel;
+        await surveyDb.updateCandidate(candidate);
+        survey.candidates.push(candidate);
+        this.recordPinUndo(survey.id, { candidateId: candidate.id, label: 'Undo add pin' });
+      }
+      const ids = new Set(observations.map((obs) => obs.id));
+      const candidates = survey.candidates.filter((candidate) => candidate.observationIds.some((id) => ids.has(id)));
+      this.mode = 'review';
+      this.placingCandidate = candidates.length === 0;
+      this.placingExistingCandidateId = candidates.length === 1 ? candidates[0].id : null;
+      if (candidates.length === 1) this.selectedFieldCandidateId = candidates[0].id;
+      this.stopInAppCamera();
+      await this.renderReviewScreen(true);
+      const location = candidates[0]?.lat != null && candidates[0]?.lon != null
+        ? { lat: candidates[0].lat, lon: candidates[0].lon } : photo.cameraPosition ?? photo.gps;
+      if (location) this.mapView.map.jumpTo({ center: [location.lon, location.lat], zoom: 18 });
+      toast(candidates.length > 1 ? 'Pins restored. Select the pin to move from the candidate cards.'
+        : candidates.length === 1 ? 'Tap the map to place the selected candidate.'
+        : 'No saved detections. Tap the map to add a manual pin, then select its tags.');
+    } catch (error) { toast((error as Error).message); }
   }
 
   private buildCandidateGeometryDetails(c: FeatureCandidate, evidence: Observation[], photoByObs: Map<string, Photo | undefined>): HTMLElement {
@@ -1677,6 +1710,7 @@ class App {
         : t(photo.headingNote ?? 'No orientation reading')}`),
       ...(photo.movementHeading != null ? [el('div', { class: 'row' }, `${t('Movement')}: ${t(`hdg ${photo.movementHeading.toFixed(0)}° (direction of travel — NOT a camera bearing)`)}`)] : []),
       el('div', { class: 'row' }, `${t('Note')}: ${photo.note || t('none')}`),
+      el('button', { class: 'btn', disabled: this.analyzing, onclick: () => { dialog.close(); void this.placePhotoPins(photo); } }, 'Place or restore pins'),
       this.buildPhotoImportInfo(photo),
       this.buildBrowserVisionDetails(photo)
     );

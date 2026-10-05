@@ -388,7 +388,10 @@
     "Stored photo format cannot be downloaded": "保存された写真の形式をダウンロードできません",
     "Survey not found": "サーベイが見つかりません",
     "Live photo limit reached (30). Save the photos from the survey list and start a new survey.": "ライブモードの上限30枚に達しました。サーベイ一覧から写真を保存し、新しいサーベイを開始してください。",
-    "Live photos: {count}/30. Remaining: {remaining}. Save the photos and start a new survey soon.": "写真 {count}/30枚（残り{remaining}枚）。区切りのよいところで写真を保存し、新しいサーベイを開始してください。"
+    "Live photos: {count}/30. Remaining: {remaining}. Save the photos and start a new survey soon.": "写真 {count}/30枚（残り{remaining}枚）。区切りのよいところで写真を保存し、新しいサーベイを開始してください。",
+    "Place or restore pins": "ピンを配置・復元",
+    "Pins restored. Select the pin to move from the candidate cards.": "ピンを復元しました。候補カードから移動するピンを選んでください。",
+    "No saved detections. Tap the map to add a manual pin, then select its tags.": "検出結果がありません。地図をタップして手動ピンを追加し、タグを選んでください。"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

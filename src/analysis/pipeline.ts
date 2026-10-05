@@ -319,7 +319,7 @@ function allowedValuesFor(
 /* Grouping + candidate building */
 /* ------------------------------------------------------------------ */
 
-function buildCandidate(
+export function buildCandidate(
   survey: Survey,
   featureType: string,
   cluster: Observation[]
