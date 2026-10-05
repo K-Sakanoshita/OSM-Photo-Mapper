@@ -376,7 +376,11 @@
     "Playground equipment and facilities": "遊具・遊び場",
     "Information, art and heritage": "案内・芸術・史跡",
     "Religious objects and places": "宗教施設・宗教関連の物体",
-    "Emergency equipment": "防災・緊急設備"
+    "Emergency equipment": "防災・緊急設備",
+    "Enlarged photo": "写真の拡大表示",
+    "Enlarge photo": "写真を拡大表示",
+    "Reset zoom": "倍率を戻す",
+    "Pinch to zoom. Drag to move the photo.": "ピンチ操作で拡大・縮小、ドラッグで写真を移動できます。"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

@@ -1,4 +1,5 @@
 import './styles.css';
+import { enablePhotoViewer } from './photos/viewer';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { appAssetUrl, language, t } from './i18n';
 
@@ -91,6 +92,7 @@ function el<K extends string>(tag: K, attrs: ElAttrs = {}, ...children: Array<No
     }
   }
   for (const c of children) appendLocalized(node, typeof c === 'string' ? document.createTextNode(t(c)) : c);
+  if (node instanceof HTMLImageElement && String(attrs.src ?? '').startsWith('data:image/')) enablePhotoViewer(node);
   return node;
 }
 
