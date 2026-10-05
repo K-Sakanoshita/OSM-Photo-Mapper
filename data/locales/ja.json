@@ -380,7 +380,13 @@
     "Enlarged photo": "写真の拡大表示",
     "Enlarge photo": "写真を拡大表示",
     "Reset zoom": "倍率を戻す",
-    "Pinch to zoom. Drag to move the photo.": "ピンチ操作で拡大・縮小、ドラッグで写真を移動できます。"
+    "Pinch to zoom. Drag to move the photo.": "ピンチ操作で拡大・縮小、ドラッグで写真を移動できます。",
+    "Download photos (ZIP)": "写真をまとめて保存（ZIP）",
+    "Preparing download\u2026": "ダウンロード準備中…",
+    "Download failed": "ダウンロードに失敗しました",
+    "No photos to download": "保存できる写真がありません",
+    "Stored photo format cannot be downloaded": "保存された写真の形式をダウンロードできません",
+    "Survey not found": "サーベイが見つかりません"
   },
   "templates": {
     "Survey {date}": "サーベイ {date}",

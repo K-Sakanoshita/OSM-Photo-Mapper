@@ -1,4 +1,5 @@
 import './styles.css';
+import { buildSurveyPhotoZip, downloadPhotoZip } from './photos/download';
 import { enablePhotoViewer } from './photos/viewer';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { appAssetUrl, language, t } from './i18n';
@@ -393,6 +394,32 @@ class App {
               `${new Date(full.createdAt).toLocaleString()} · ${full.photos.length} photo(s) · ${full.candidates.length} candidate(s)`
             )
           ),
+          el('div', { class: 'survey-actions' },
+            el('button', {
+              class: 'btn small',
+              disabled: !full.photos.some((photo) => photo.image),
+              onclick: async (event) => {
+                event.stopPropagation();
+                const button = event.currentTarget as HTMLButtonElement;
+                button.disabled = true;
+                button.setAttribute('aria-busy', 'true');
+                button.textContent = t('Preparing download…');
+                try {
+                  const latest = await surveyDb.loadSurvey(meta.id);
+                  if (!latest) throw new Error(t('Survey not found'));
+                  const zip = await buildSurveyPhotoZip(latest, (done, total) => {
+                    button.textContent = `${t('Preparing download…')} ${done}/${total}`;
+                  });
+                  downloadPhotoZip(zip, latest.name);
+                } catch (error) {
+                  toast(`${t('Download failed')}: ${t(error instanceof Error ? error.message : String(error))}`);
+                } finally {
+                  button.disabled = false;
+                  button.removeAttribute('aria-busy');
+                  button.textContent = t('Download photos (ZIP)');
+                }
+              }
+            }, 'Download photos (ZIP)'),
           el(
             'button',
             {
@@ -401,7 +428,7 @@ class App {
               onclick: (e) => void this.deleteSurvey(meta.id, e)
             },
             '🗑'
-          )
+          ))
         );
       })
     );
