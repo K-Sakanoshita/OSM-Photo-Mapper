@@ -109,6 +109,7 @@ export interface CameraHeading {
  * consumers (map markers, ray estimation, position evidence).
  */
 export interface Photo {
+  analysisStatus?: PhotoAnalysisStatus;
   browserVision?: import('./analysis/browser-vision/policy').BrowserVisionResult;
   importInfo?: {
     fileName: string;

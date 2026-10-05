@@ -722,3 +722,14 @@ body[data-mode='list'] #bottombar {
 body[data-mode='survey'] #bottombar:has(.live-photo-limit), body[data-mode='camera'] #bottombar:has(.live-photo-limit) { flex-wrap: wrap; }
 .photo-gallery .photo-thumbnail { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .photo-pin-action { font-size: 12px; white-space: normal; }
+.pin-photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); gap: 10px; margin: 8px 0; }
+.pin-photo-tile { min-width: 0; margin: 0; padding: 8px; border: 1px solid #dce4ea; border-radius: 8px; background: #f6f8fa; }
+.pin-photo-tile figcaption { margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.pin-photo-tile .evidence-photo { width: fit-content; }
+.pin-photo-tile .row { font-size: 12px; }
+.photo-library { margin-top: 16px; padding: 12px; border: 1px solid #dce4ea; border-radius: 8px; }
+.photo-library summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.photo-library .photo-thumbnail { width: 180px; }
+.photo-assignment { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+
+.pin-photo-tile .evidence-photo img { max-height: 180px; }

@@ -1,5 +1,6 @@
 import './styles.css';
 import { buildSurveyPhotoZip, downloadPhotoZip } from './photos/download';
+import { photoAssignment, photosForPin } from './photos/associations';
 import { enablePhotoViewer } from './photos/viewer';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { appAssetUrl, language, t } from './i18n';
@@ -627,6 +628,11 @@ class App {
     const photo = s.photos.find((p) => p.id === this.selectedFieldPhotoId);
     const open = !!candidate || !!photo;
     const strip = el('div', { class: 'field-strip' },
+      ...(s.candidates.length ? [el('span', { class: 'field-strip-title' }, `${t('Object pins')} (${s.candidates.length})`)] : []),
+      ...s.candidates.map((c, index) => el('button', {
+        class: 'btn small' + (candidate?.id === c.id ? ' selected' : ''),
+        onclick: () => this.selectFieldCandidate(c.id)
+      }, `${index + 1}: ${getFeatureClass(c.featureType)?.label ?? c.featureType}`)),
       el('span', { class: 'field-strip-title' }, `Photos (${s.photos.length})`),
       ...(s.captureMode === 'static' ? [el('span', { class: 'hint photo-picker-status', title: 'Photo file selection is recommended for PC. On phones, GPS metadata may be hidden; place the photo on the map if needed.' }, 'Photo file selection: recommended for PC')] : []),
       ...s.photos.map((p, index) => el('div', { class: 'photo-frame photo-thumbnail' },
@@ -637,10 +643,6 @@ class App {
         }, p.image ? el('img', { src: p.image, alt: '' }) : `Photo ${index + 1}`),
         this.photoDetailsButton(p, true)
       )),
-      ...s.candidates.map((c, index) => el('button', {
-        class: 'btn small' + (candidate?.id === c.id ? ' selected' : ''),
-        onclick: () => this.selectFieldCandidate(c.id)
-      }, `${index + 1}: ${getFeatureClass(c.featureType)?.label ?? c.featureType}`)),
       ...(open ? [el('button', { class: 'btn small', 'aria-label': 'Close inspector', onclick: () => {
         this.selectedFieldCandidateId = null;
         this.selectedFieldPhotoId = null;
@@ -1166,6 +1168,12 @@ class App {
       result.candidates.push(...fresh.candidates.filter((c) => c.analyzer === 'manual'));
       await surveyDb.saveAnalysis(fresh.id, result.observations, result.candidates);
       fresh.candidates = result.candidates;
+      const savedPhotos = (await surveyDb.loadSurvey(fresh.id))?.photos ?? fresh.photos;
+      for (const status of result.photoStatuses ?? []) {
+        const photo = savedPhotos.find((item) => item.id === status.photoId);
+        if (photo) { photo.analysisStatus = status; await surveyDb.addPhoto(fresh.id, photo); }
+      }
+      fresh.photos = savedPhotos;
       // Analysis may take minutes while new GPS samples keep arriving.
       fresh.gpsSamples = s.gpsSamples;
       this.pinHistory.delete(fresh.id);
@@ -1528,7 +1536,7 @@ class App {
     this.setMode('review', 'Review candidates');
 
     this.mapView.setTrack(s);
-    this.mapView.setPhotos(s.photos);
+    this.mapView.setPhotos([]);
     this.mapView.setCandidates(s.candidates);
     requestAnimationFrame(() => {
       if (this.mode !== 'review' || this.survey?.id !== s.id) return;
@@ -1564,9 +1572,12 @@ class App {
       ...(s.candidates.length === 0 ? [el('div', { class: 'empty-hint' }, s.photos.length > 0
         ? 'No candidates. Your photos are shown below. Analyze again or add a pin manually.'
         : 'No candidates yet. Add a pin on the map, or capture photos and press Map photos.')] : []),
-      ...(s.photos.length > 0 ? [this.buildPhotoGallery(s.photos), el('button', { class: 'btn', onclick: () => { this.mode = 'analysis'; this.render(); } }, 'Analyze photos again')] : []),
-      el('div', { class: 'section-title' }, `Candidates (${s.candidates.length})`),
-      el('div', { class: 'candidate-grid' }, ...cards)
+      el('div', { class: 'section-title' }, `${t('Object pins')} (${s.candidates.length})`),
+      el('div', { class: 'candidate-grid' }, ...cards),
+      ...(s.photos.length > 0 ? [el('details', { class: 'photo-library', open: s.candidates.length === 0 },
+        el('summary', {}, 'Photo library — capture, analysis and pin assignment'),
+        this.buildPhotoGallery(s.photos, observations),
+        el('button', { class: 'btn', onclick: () => { this.mode = 'analysis'; this.render(); } }, 'Analyze photos again'))] : [])
     );
   }
 
@@ -1583,18 +1594,27 @@ class App {
     return map;
   }
 
-  private buildPhotoGallery(photos: Photo[]): HTMLElement {
+  private buildPhotoGallery(photos: Photo[], observations?: Observation[]): HTMLElement {
     return el('div', { class: 'photo-gallery' },
       el('div', { class: 'section-title' }, `Photos (${photos.length})`),
       el('div', { class: 'photo-gallery-items' }, ...photos.map((photo) =>
         el('div', { class: 'photo-frame photo-thumbnail' },
-          el('button', { class: 'field-photo-button', 'aria-label': 'Photo details', onclick: () => this.showPhotoDetails(photo) },
+          el('button', { class: 'field-photo-button', 'aria-label': 'Photo details', onclick: (event) => { event.stopPropagation(); void this.showPhotoDetails(photo); } },
             photo.image ? el('img', { src: photo.image, alt: 'Captured source photo' }) : 'Photo'),
           this.photoDetailsButton(photo, true),
+          ...(observations ? [this.buildPhotoAssignment(photo, observations)] : []),
           el('button', { class: 'btn small photo-pin-action', disabled: this.analyzing, onclick: (event) => { event.stopPropagation(); void this.placePhotoPins(photo); } }, 'Place or restore pins')
         )
       ))
     );
+  }
+
+  private buildPhotoAssignment(photo: Photo, observations: Observation[]): HTMLElement {
+    const { state, pins } = photoAssignment(photo, observations, this.survey?.candidates ?? []);
+    const labels = { assigned: 'Assigned to pins', unassigned: 'Unassigned detections', failed: 'Analysis failed', empty: 'No detections', pending: 'Not analyzed / no saved result' };
+    return el('div', { class: 'photo-assignment' }, el('span', {}, labels[state]),
+      ...pins.map((pin) => el('button', { class: 'btn small', onclick: () => this.selectFieldCandidate(pin.id) },
+        `${t('Pin')} ${(this.survey?.candidates.indexOf(pin) ?? 0) + 1}: ${t(getFeatureClass(pin.featureType)?.label ?? pin.featureType)}`)));
   }
 
   private async placePhotoPins(photo: Photo): Promise<void> {
@@ -1895,22 +1915,23 @@ class App {
       if (!evidence.some((obs) => photoByObs.get(obs.id)?.id === photo.id)) appendLocalized(card, this.photoDetailsButton(photo));
     }
 
-    for (const obs of evidence) {
-      const sourceImage = photoByObs.get(obs.id)?.image;
-      if (sourceImage) {
-        const box = obs.bbox;
-        appendLocalized(card, el('div', { class: 'evidence-photo' },
-          el('img', { src: sourceImage, alt: `Source photo with ${obs.featureType} detection box` }),
-          this.photoDetailsButton(photoByObs.get(obs.id)!),
-          el('div', { class: 'evidence-box', style: `left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%` })
-        ));
+    const pinPhotos = photosForPin(c, evidence, this.survey?.photos ?? []);
+    const photoGrid = el('div', { class: 'pin-photo-grid' });
+    for (const { photo, observations } of pinPhotos) {
+      const tile = el('figure', { class: 'pin-photo-tile' },
+        el('figcaption', {}, `${t('Photo')} ${(this.survey?.photos.indexOf(photo) ?? 0) + 1}`));
+      if (photo.image) appendLocalized(tile, el('div', { class: 'evidence-photo' },
+        el('img', { src: photo.image, alt: 'Captured source photo' }), this.photoDetailsButton(photo),
+        ...observations.map((obs) => el('div', { class: 'evidence-box', style: `left:${obs.bbox.x * 100}%;top:${obs.bbox.y * 100}%;width:${obs.bbox.w * 100}%;height:${obs.bbox.h * 100}%` }))));
+      for (const obs of observations) {
+        appendLocalized(tile, el('div', { class: 'row' },
+          `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
+          `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : t('none')}`));
+        appendLocalized(tile, el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
       }
-      appendLocalized(card, el('div', { class: 'row' },
-        `Detection: ${obs.featureType} ${obs.detectionConfidence == null ? 'confidence unknown' : `${Math.round(obs.detectionConfidence * 100)}%`} · `,
-        `OCR: ${obs.textSeen ? `${obs.textSeen}${obs.ocrConfidence == null ? '' : ` (${Math.round(obs.ocrConfidence * 100)}%)`}` : t('none')}`
-      ));
-      appendLocalized(card, el('div', { class: 'row' }, `Suggested attributes/tags: ${Object.entries(obs.tagSuggestions).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`));
+      photoGrid.append(tile);
     }
+    if (pinPhotos.length) appendLocalized(card, el('div', { class: 'section-title' }, `${t('Related photos')} (${pinPhotos.length})`), photoGrid);
 
     // Issue #9: review-only class — the OSM mapping is uncertain/ambiguous,
     // so nothing is applied automatically; the reviewer decides.
